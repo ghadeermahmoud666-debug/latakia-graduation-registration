@@ -147,12 +147,12 @@ function App() {
   const amountSummary = useMemo(() => ({ student: Number(settings.student_fee || 0), companion: Number(settings.companion_fee || 0), total }), [settings, total]);
 
   return <div className="app-shell">
-    <div className="topline"><div className="container topline-inner"><span><i className="dot" /> منصة التسجيل الرسمية</span><span>جامعة اللاذقية <b className="top-sep">•</b> موسم حفلات التخرج</span></div></div>
+    <div className="topline"><div className="container topline-inner"><span><i className="dot" /> اتحاد طلبة سوريا</span><span>نحو مستقبل يصنعه الشباب</span></div></div>
     <header className="site-header">
       <div className="container header-inner">
         <button className="brand" onClick={() => setPage('register')} aria-label="العودة إلى الرئيسية">
-          <div className="brand-mark"><span>ل</span><small>تخرج</small></div>
-          <div className="brand-copy"><strong>{settings.university_label || DEFAULT_SETTINGS.university_label}</strong><span>{settings.organizer || DEFAULT_SETTINGS.organizer}</span></div>
+          <img className="brand-logo" src="/brand/ssu-emblem.png" alt="شعار اتحاد طلبة سوريا" />
+          <div className="brand-copy"><strong>{settings.organizer || DEFAULT_SETTINGS.organizer}</strong><span>{settings.university_label || DEFAULT_SETTINGS.university_label}</span></div>
         </button>
         <nav className="main-nav" aria-label="التنقل الرئيسي">
           <button className={page === 'register' ? 'active' : ''} onClick={() => setPage('register')}>التسجيل</button>
@@ -173,11 +173,8 @@ function App() {
               <p>أكمل بياناتك الجامعية، ثبّت رسومك، وارفع إيصال الدفع لمتابعة طلب التسجيل لحفل التخرج بكل سهولة.</p>
               <div className="hero-points"><span><b>01</b> تعبئة البيانات</span><span><b>02</b> دفع الرسوم</span><span><b>03</b> تدقيق الطلب</span></div>
             </div>
-            <div className="hero-art" aria-hidden="true">
-              <div className="orbit orbit-one" /><div className="orbit orbit-two" />
-              <div className="cap-icon"><div className="cap-top" /><div className="cap-base" /><div className="cap-tassel" /></div>
-              <div className="art-star star-a">✦</div><div className="art-star star-b">✧</div><div className="art-star star-c">✦</div>
-              <div className="art-caption"><span>CLASS OF</span><strong>2026</strong><small>خطوة نحو المستقبل</small></div>
+            <div className="hero-art identity-banner-wrap">
+              <img src="/brand/ssu-identity-banner.jpg" alt="هوية اتحاد طلبة سوريا: نحو مستقبل يصنعه الشباب" />
             </div>
           </div>
           <div className="hero-bottom-line"><div className="container"><span>رحلتك الجامعية تستحق احتفالاً يليق بها</span><span className="line-decoration" /></div></div>
@@ -245,7 +242,7 @@ function App() {
       {page === 'admin' && staffUser && <AdminDashboard staffUser={staffUser} settings={settings} setSettings={setSettings} refreshSettings={loadSettings} notify={notify} onSignOut={signOut} />}
     </main>
 
-    <footer className="site-footer"><div className="container footer-inner"><div className="footer-brand"><div className="brand-mark small-mark"><span>ل</span><small>تخرج</small></div><div><strong>{settings.university_label || DEFAULT_SETTINGS.university_label}</strong><span>{settings.organizer || DEFAULT_SETTINGS.organizer}</span></div></div><p>منصة تنظيم التسجيل لحفلات التخرج · {new Date().getFullYear()}</p><span className="footer-status"><i className="dot" /> نظام التسجيل والمتابعة</span></div></footer>
+    <footer className="site-footer"><div className="container footer-inner"><div className="footer-brand"><img className="brand-logo small-brand-logo" src="/brand/ssu-emblem.png" alt="" /><div><strong>{settings.organizer || DEFAULT_SETTINGS.organizer}</strong><span>{settings.university_label || DEFAULT_SETTINGS.university_label}</span></div></div><p>منصة التسجيل لحفلات التخرج · نحو مستقبل يصنعه الشباب · {new Date().getFullYear()}</p><span className="footer-status"><i className="dot" /> نظام التسجيل والمتابعة</span></div></footer>
 
     {toast && <div className={`toast toast-${toast.kind}`} role="status"><span>{toast.kind === 'error' ? '!' : toast.kind === 'success' ? '✓' : 'i'}</span>{toast.message}<button onClick={() => setToast(null)} aria-label="إغلاق">×</button></div>}
     {success && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="تم إرسال طلب التسجيل"><div className="success-modal panel"><button className="modal-close" onClick={() => setSuccess(null)} aria-label="إغلاق">×</button><div className="success-check">✓</div><span className="section-index">تم استلام طلبك</span><h2>تم إرسال التسجيل بنجاح</h2><p>احتفظ بكود المتابعة التالي. ستحتاج إليه مع رقمك الجامعي لمعرفة قرار فريق التنظيم.</p><div className="tracking-code-card"><span>كود المتابعة الخاص بك</span><strong>{success.tracking_code}</strong><button onClick={() => { navigator.clipboard?.writeText(success.tracking_code); notify('تم نسخ كود المتابعة.', 'success'); }}>نسخ الكود ⧉</button></div><div className="success-total"><span>المبلغ المسجل في الطلب</span><strong>{fmt(success.amount_syp)} ل.س</strong></div><button className="primary-button" onClick={() => { setTrackingCode(success.tracking_code); setTrackingUni(success.university_number || ''); setSuccess(null); setPage('track'); }}><span>الانتقال إلى تتبع الطلب</span><span className="button-arrow">←</span></button><small>لا تغلق هذه النافذة قبل حفظ الكود أو نسخه.</small></div></div>}
