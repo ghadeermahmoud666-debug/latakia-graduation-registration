@@ -30,11 +30,11 @@ async function makeTicketPdf(ticket, application, batchName) {
   ctx.fillStyle = '#a93236'; ctx.fillRect(0, 22, 420, 10); ctx.fillStyle = '#c3a15c'; ctx.fillRect(420, 22, 320, 10);
   ctx.strokeStyle = '#d9cbb6'; ctx.lineWidth = 3; ctx.strokeRect(36, 48, canvas.width - 72, canvas.height - 84);
   const logo = await imageFromUrl(`${window.location.origin}/brand/ssu-emblem.png`);
-  if (logo) { try { ctx.drawImage(logo, 1240, 72, 135, 135); } catch {} }
+  if (logo) { try { ctx.drawImage(logo, 82, 72, 135, 135); } catch {} }
   const isGraduate = ticket.ticket_type === 'graduate' || ticket.ticket_number === 0;
   const right = 1360;
-  drawWrapped(ctx, 'اتحاد طلبة سوريا – فرع محافظة اللاذقية', right, 112, 1050, 44, 32, '#18594b', 700);
-  drawWrapped(ctx, `${batchName || 'دفعة 2026'} · جامعة اللاذقية`, right, 160, 1050, 34, 24, '#68766b', 500);
+  drawWrapped(ctx, 'اتحاد طلبة سوريا – فرع محافظة اللاذقية', right, 112, 1040, 44, 32, '#18594b', 700);
+  drawWrapped(ctx, `${batchName || 'دفعة 2026'} · جامعة اللاذقية`, right, 160, 1040, 34, 24, '#68766b', 500);
   drawWrapped(ctx, isGraduate ? 'بطاقة دخول الخريج' : `بطاقة دخول المرافق ${ticket.ticket_number}`, right, 248, 1050, 55, 40, '#a93236', 700);
   drawWrapped(ctx, application.full_name || '—', right, 326, 1050, 50, 38, '#203b34', 700);
   drawWrapped(ctx, application.department || '—', right, 379, 1050, 37, 27, '#68766b', 500);

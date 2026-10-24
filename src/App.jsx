@@ -369,14 +369,14 @@ function App() {
           <div className="hero-pattern" />
           <div className="container hero-content">
             <div className="hero-copy">
-              <div className="eyebrow"><span className="eyebrow-star">✳</span> لحظة تستحق أن تُخلّد</div>
+              <div className="eyebrow"><span className="eyebrow-star">✦</span> لحظة تستحق أن تُخلّد</div>
               <h1>{settings.event_title || 'التسجيل لحفلات التخرج'}<br /><em>{settings.batch_name || DEFAULT_SETTINGS.batch_name}</em></h1>
               <p>اتبع الخطوات بالترتيب، وانسخ رمز التتبع قبل الدفع. لن تُقبل أي فاتورة لا تتضمن رمز التتبع في ملاحظات تحويل شام كاش.</p>
               <div className="hero-points"><span><b>01</b> بيانات الطالب</span><span><b>02</b> رمز التتبع</span><span><b>03</b> الدفع والفاتورة</span></div>
             </div>
             <div className="hero-art graduation-hero-art" aria-label="قبعة التخرج ودفعة 2026">
               <div className="orbit" /><div className="orbit orbit-two" />
-              <span className="art-star star-a">✦</span><span className="art-star star-b">✳</span><span className="art-star star-c">✧</span>
+              <span className="art-star star-a">✦</span><span className="art-star star-b">✦</span><span className="art-star star-c">✧</span>
               <div className="cap-icon"><div className="cap-top" /><div className="cap-base" /><div className="cap-tassel" /></div>
               <div className="art-caption"><span>GRADUATION CLASS</span><strong>2026</strong><small>دفعة التخرج</small></div>
             </div>
@@ -395,14 +395,14 @@ function App() {
             <form className="panel registration-form" onSubmit={handleCreateRegistration}>
               <div className="form-panel-title"><span className="step-circle">1</span><div><strong>المعلومات الشخصية</strong><small>ابدأ ببيانات التواصل الأساسية</small></div></div>
               <div className="field-grid">
-                <label className="field field-full"><span>الاسم الثلاثي <b>*</b></span><div className="input-wrap"><span className="input-icon">♙</span><input required minLength="5" maxLength="120" value={form.full_name} onChange={(e) => setField('full_name', e.target.value)} placeholder="مثال: أحمد محمد علي" autoComplete="name" disabled={registrationUnavailable} /></div></label>
-                <label className="field"><span>الرقم الجامعي <b>*</b></span><div className="input-wrap"><span className="input-icon">№</span><input required maxLength="32" value={form.university_number} onChange={(e) => setField('university_number', e.target.value)} placeholder="أدخل رقمك الجامعي" disabled={registrationUnavailable} /></div></label>
-                <label className="field"><span>رقم الهاتف للتواصل <b>*</b></span><div className="input-wrap"><span className="input-icon">☎</span><input required type="tel" maxLength="20" value={form.phone_number} onChange={(e) => setField('phone_number', e.target.value)} placeholder="09xxxxxxxx" autoComplete="tel" disabled={registrationUnavailable} /></div></label>
+                <label className="field field-full"><span>الاسم الثلاثي <b>*</b></span><div className="input-wrap"><input required minLength="5" maxLength="120" value={form.full_name} onChange={(e) => setField('full_name', e.target.value)} placeholder="مثال: أحمد محمد علي" autoComplete="name" disabled={registrationUnavailable} /></div></label>
+                <label className="field"><span>الرقم الجامعي <b>*</b></span><div className="input-wrap"><input required maxLength="32" value={form.university_number} onChange={(e) => setField('university_number', e.target.value)} placeholder="أدخل رقمك الجامعي" disabled={registrationUnavailable} /></div></label>
+                <label className="field"><span>رقم الهاتف للتواصل <b>*</b></span><div className="input-wrap"><input required type="tel" maxLength="20" value={form.phone_number} onChange={(e) => setField('phone_number', e.target.value)} placeholder="09xxxxxxxx" autoComplete="tel" disabled={registrationUnavailable} /></div></label>
               </div>
               <div className="form-divider" />
               <div className="form-panel-title"><span className="step-circle">2</span><div><strong>المواد المحمولة والجهة الدراسية</strong><small>القوائم يحددها فريق التنظيم</small></div></div>
               <div className="field-grid">
-                <label className="field field-full"><span>عدد المواد المحمولة <b>*</b></span><div className="input-wrap"><span className="input-icon">№</span><input required type="number" inputMode="numeric" min="0" max={settings.max_carried_subjects} step="1" value={form.carried_subjects} onChange={(e) => setField('carried_subjects', e.target.value)} disabled={registrationUnavailable} /></div><small className="field-help">الحد الأقصى المسموح: {fmt(settings.max_carried_subjects)} مادة.</small></label>
+                <label className="field field-full"><span>عدد المواد المحمولة <b>*</b></span><div className="input-wrap"><input required type="number" inputMode="numeric" min="0" max={settings.max_carried_subjects} step="1" value={form.carried_subjects} onChange={(e) => setField('carried_subjects', e.target.value)} disabled={registrationUnavailable} /></div><small className="field-help">الحد الأقصى المسموح: {fmt(settings.max_carried_subjects)} مادة.</small></label>
                 <label className="field field-full"><span>الكلية أو المعهد <b>*</b></span><select required value={form.academic_unit_id} onChange={(e) => setForm((old) => ({ ...old, academic_unit_id: e.target.value, academic_specialization_id: '' }))} disabled={registrationUnavailable || openUnits.length === 0}><option value="">اختر الكلية أو المعهد</option>{openUnits.map((unit) => <option value={unit.id} key={unit.id}>{unit.unit_type === 'institute' ? 'معهد' : 'كلية'} — {unit.name}</option>)}</select></label>
                 {selectedUnit && selectedUnitRequiresSpecialization && <label className="field field-full"><span>الاختصاص <b>*</b></span><select required value={form.academic_specialization_id} onChange={(e) => setField('academic_specialization_id', e.target.value)} disabled={registrationUnavailable || openSpecsForUnit.length === 0}><option value="">اختر الاختصاص</option>{openSpecsForUnit.map((spec) => <option key={spec.id} value={spec.id}>{spec.name}</option>)}</select><small className="field-help">تظهر الاختصاصات المفتوحة للتسجيل فقط.</small></label>}
                 {selectedUnit && !selectedUnitRequiresSpecialization && <div className="field field-full no-specialization-note">لا توجد اختصاصات مضافة لهذه الجهة الدراسية؛ يمكنك المتابعة دون اختيار اختصاص.</div>}
@@ -438,13 +438,13 @@ function App() {
         </section>}
       </>}
 
-      {page === 'track' && <section className="container inner-page"><div className="inner-hero"><span className="section-index">متابعة التسجيل</span><h1>أين وصل طلبك؟</h1><p>أدخل رمز التتبع الخاص بك فقط. هذا الرمز فريد ويكفي لمعرفة حالة الطلب؛ لا تحتاج إلى الرقم الجامعي.</p></div><div className="track-layout"><form className="panel track-panel" onSubmit={handleTrack}><label className="field"><span>رمز التتبع <b>*</b></span><div className="input-wrap"><span className="input-icon">⌘</span><input required value={trackingCode} onChange={(e) => setTrackingCode(e.target.value.toUpperCase())} placeholder="LAT- ثم الرمز الطويل" autoCapitalize="characters" /></div></label><button className="primary-button" disabled={trackingBusy}><span>{trackingBusy ? 'جارٍ البحث…' : 'عرض حالة الطلب'}</span><span className="button-arrow">←</span></button><p className="form-footnote">احتفظ برمز التتبع ولا تشاركه إلا مع فريق التنظيم. لا يمكن تتبع الطلب برقم جامعي وحده.</p></form>
+      {page === 'track' && <section className="container inner-page"><div className="inner-hero"><span className="section-index">متابعة التسجيل</span><h1>أين وصل طلبك؟</h1><p>أدخل رمز التتبع الخاص بك فقط. هذا الرمز فريد ويكفي لمعرفة حالة الطلب؛ لا تحتاج إلى الرقم الجامعي.</p></div><div className="track-layout"><form className="panel track-panel" onSubmit={handleTrack}><label className="field"><span>رمز التتبع <b>*</b></span><div className="input-wrap"><input required value={trackingCode} onChange={(e) => setTrackingCode(e.target.value.toUpperCase())} placeholder="LAT- ثم الرمز الطويل" autoCapitalize="characters" /></div></label><button className="primary-button" disabled={trackingBusy}><span>{trackingBusy ? 'جارٍ البحث…' : 'عرض حالة الطلب'}</span><span className="button-arrow">←</span></button><p className="form-footnote">احتفظ برمز التتبع ولا تشاركه إلا مع فريق التنظيم. لا يمكن تتبع الطلب برقم جامعي وحده.</p></form>
           {trackingResult ? <div className="panel track-result"><div className="result-header"><span className="section-index">نتيجة الاستعلام</span><span className={`status-badge ${STATUS[trackingResult.status]?.className || 'pending'}`}>{STATUS[trackingResult.status]?.label || trackingResult.status}</span></div><h2>{trackingResult.full_name}</h2><div className="result-code"><span>رمز التتبع</span><strong dir="ltr">{trackingResult.tracking_code}</strong></div><div className="result-meta"><div><span>تاريخ التقديم</span><strong>{humanDate(trackingResult.created_at)}</strong></div><div><span>المبلغ المسجل</span><strong>{fmt(trackingResult.amount_syp)} ل.س</strong></div><div><span>الكلية أو المعهد</span><strong>{trackingResult.department}</strong></div><div><span>الاختصاص</span><strong>{trackingResult.specialization}</strong></div></div>{trackingResult.status === 'awaiting_payment' && <><div className="important-warning"><strong>الطلب بانتظار الفاتورة</strong><p>أتمم التحويل مع كتابة رمز التتبع في الملاحظات، ثم ارفع فاتورة PDF هنا.</p></div><form className="track-receipt-form" onSubmit={handleTrackReceiptUpload}><label className="field"><span>فاتورة التحويل PDF <b>*</b></span><input type="file" accept="application/pdf,.pdf" onChange={(e) => setTrackReceipt(e.target.files?.[0] || null)} required /></label><button className="primary-button" disabled={trackReceiptBusy || !trackReceipt}><span>{trackReceiptBusy ? 'جارٍ الرفع…' : 'رفع الفاتورة'}</span></button></form></>}{trackingResult.status === 'pending' && <p className="result-message">تم استلام الفاتورة؛ طلبك قيد المراجعة من قبل فريق التنظيم.</p>}{trackingResult.status === 'approved' && <><ApprovalCelebration name={trackingResult.full_name} /><TicketGallery tickets={trackingResult.tickets || []} application={trackingResult} batchName={settings.batch_name || DEFAULT_SETTINGS.batch_name} /></>}{trackingResult.status === 'rejected' && <div className="rejection-message"><strong>سبب الرفض</strong><p>{trackingResult.rejection_reason || 'يرجى التواصل مع فريق التنظيم لمعرفة التفاصيل.'}</p></div>}</div> : <div className="track-help"><div className="big-lock">⌑</div><h3>بياناتك محمية</h3><p>لا يظهر طلبك إلا لمن يمتلك رمز التتبع الفريد.</p></div>}
         </div></section>}
 
       {page === 'verify' && <section className="container inner-page ticket-verification-page"><div className="inner-hero"><span className="section-index">التحقق من بطاقة الدخول</span><h1>بوابة التحقق لحفل التخرج</h1><p>تحقق من صلاحية البطاقة ونوعها قبل السماح بالدخول.</p></div>{ticketVerifyBusy && <div className="panel verification-state"><div className="verification-spinner" /><h2>جارٍ التحقق من رمز QR…</h2></div>}{!ticketVerifyBusy && ticketVerifyError && <div className="panel verification-state invalid-ticket"><div className="verification-symbol">×</div><h2>تعذّر التحقق من البطاقة</h2><p>{ticketVerifyError}</p></div>}{!ticketVerifyBusy && ticketVerification?.valid && <VerifiedTicket verification={ticketVerification} />}</section>}
 
-      {page === 'staff' && <section className="container inner-page staff-page"><div className="inner-hero"><span className="section-index">للاستخدام الداخلي</span><h1>بوابة فريق التنظيم</h1><p>صفحة داخلية غير ظاهرة في قائمة الموقع العامة. الدخول مخصص للحسابات التي أنشأها مدير النظام فقط.</p></div><div className="staff-login-layout"><div className="panel staff-login-card"><div className="staff-login-mark">⌑</div><h2>تسجيل دخول الفريق</h2><p>استخدم بيانات الحساب المصرّح به من مدير النظام.</p><form onSubmit={handleLogin}><label className="field"><span>البريد الإلكتروني</span><div className="input-wrap"><span className="input-icon">✉</span><input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" placeholder="name@example.com" /></div></label><label className="field"><span>كلمة المرور</span><div className="input-wrap"><span className="input-icon">⌑</span><input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" placeholder="أدخل كلمة المرور" /></div></label><button className="primary-button" disabled={authChecking || !isConfigured}><span>{authChecking ? 'جارٍ التحقق…' : 'تسجيل الدخول'}</span><span className="button-arrow">←</span></button>{!isConfigured && <small className="muted-line">إعداد قاعدة البيانات مطلوب قبل تسجيل الدخول.</small>}</form></div><div className="staff-login-info"><span className="section-index">صلاحيات المراجعة</span><h2>الطلبات المصرح بها فقط.</h2><p>تُحدد صلاحية كل حساب حسب الكليات والاختصاصات المسموح له بمراجعتها. لا يكفي إخفاء رابط الدخول وحده لحماية البيانات؛ يتم تطبيق الصلاحيات من قاعدة البيانات. يستطيع المدير وحده تعديل الرسوم وقوائم الكليات والاختصاصات.</p><div className="staff-feature"><span>✓</span><div><strong>مراجعة الإيصالات</strong><small>فتح ملف PDF من مساحة تخزين خاصة</small></div></div><div className="staff-feature"><span>✓</span><div><strong>توثيق القرار</strong><small>تسجيل الموافقة أو سبب الرفض وتاريخ المراجعة</small></div></div><div className="staff-feature"><span>✓</span><div><strong>إدارة قوائم التسجيل</strong><small>الكليات والمعاهد والاختصاصات وحدود المواد المحمولة</small></div></div></div></div></section>}
+      {page === 'staff' && <section className="container inner-page staff-page"><div className="inner-hero"><span className="section-index">للاستخدام الداخلي</span><h1>بوابة فريق التنظيم</h1><p>صفحة داخلية غير ظاهرة في قائمة الموقع العامة. الدخول مخصص للحسابات التي أنشأها مدير النظام فقط.</p></div><div className="staff-login-layout"><div className="panel staff-login-card"><div className="staff-login-mark">⌑</div><h2>تسجيل دخول الفريق</h2><p>استخدم بيانات الحساب المصرّح به من مدير النظام.</p><form onSubmit={handleLogin}><label className="field"><span>البريد الإلكتروني</span><div className="input-wrap"><input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" placeholder="name@example.com" /></div></label><label className="field"><span>كلمة المرور</span><div className="input-wrap"><input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" placeholder="أدخل كلمة المرور" /></div></label><button className="primary-button" disabled={authChecking || !isConfigured}><span>{authChecking ? 'جارٍ التحقق…' : 'تسجيل الدخول'}</span><span className="button-arrow">←</span></button>{!isConfigured && <small className="muted-line">إعداد قاعدة البيانات مطلوب قبل تسجيل الدخول.</small>}</form></div><div className="staff-login-info"><span className="section-index">صلاحيات المراجعة</span><h2>الطلبات المصرح بها فقط.</h2><p>تُحدد صلاحية كل حساب حسب الكليات والاختصاصات المسموح له بمراجعتها. لا يكفي إخفاء رابط الدخول وحده لحماية البيانات؛ يتم تطبيق الصلاحيات من قاعدة البيانات. يستطيع المدير وحده تعديل الرسوم وقوائم الكليات والاختصاصات.</p><div className="staff-feature"><span>✓</span><div><strong>مراجعة الإيصالات</strong><small>فتح ملف PDF من مساحة تخزين خاصة</small></div></div><div className="staff-feature"><span>✓</span><div><strong>توثيق القرار</strong><small>تسجيل الموافقة أو سبب الرفض وتاريخ المراجعة</small></div></div><div className="staff-feature"><span>✓</span><div><strong>إدارة قوائم التسجيل</strong><small>الكليات والمعاهد والاختصاصات وحدود المواد المحمولة</small></div></div></div></div></section>}
 
       {page === 'staff-password' && staffUser && <section className="container inner-page staff-page"><div className="inner-hero"><span className="section-index">خطوة أمان مطلوبة</span><h1>غيّر كلمة المرور المؤقتة</h1><p>يجب تعيين كلمة مرور شخصية قبل استخدام لوحة فريق التنظيم. استخدم كلمة مرور طويلة وفريدة ولا تشاركها مع أحد.</p></div><div className="staff-login-layout"><form className="panel staff-login-card" onSubmit={handleForcedPasswordChange}><h2>كلمة مرور جديدة</h2><label className="field"><span>كلمة المرور الجديدة</span><input type="password" required minLength={12} autoComplete="new-password" value={newStaffPassword} onChange={(e) => setNewStaffPassword(e.target.value)} placeholder="12 محرفاً على الأقل" /></label><label className="field"><span>تأكيد كلمة المرور</span><input type="password" required minLength={12} autoComplete="new-password" value={confirmStaffPassword} onChange={(e) => setConfirmStaffPassword(e.target.value)} placeholder="أعد كتابة كلمة المرور" /></label><button className="primary-button" disabled={authChecking}><span>{authChecking ? 'جارٍ الحفظ…' : 'حفظ كلمة المرور والمتابعة'}</span></button><button type="button" className="secondary-button" onClick={signOut}>تسجيل الخروج</button></form></div></section>}
       {page === 'admin' && staffUser && <AdminDashboard staffUser={staffUser} staffRole={staffRole} settings={settings} setSettings={setSettings} refreshSettings={loadSettings} catalog={catalog} catalogError={catalogError} refreshCatalog={loadCatalog} notify={notify} onSignOut={signOut} />}
@@ -460,11 +460,11 @@ function ApprovalCelebration({ name }) {
   const pieces = Array.from({ length: 24 }, (_, index) => index);
   return <section className="approval-celebration" aria-live="polite">
     <div className="celebration-confetti" aria-hidden="true">{pieces.map((piece) => <span key={piece} style={{ left: `${(piece * 37) % 100}%`, animationDelay: `${(piece % 8) * 0.16}s`, animationDuration: `${2.6 + (piece % 5) * 0.35}s`, '--piece-rotate': `${piece * 43}deg` }} />)}</div>
-    <div className="celebration-badge" aria-hidden="true">🎓</div>
+    <div className="celebration-badge" aria-hidden="true"><span className="celebration-cap-shape" /></div>
     <span className="section-index">خبر سعيد</span>
-    <h3>🎉 مبارك يا {name || 'خريجنا العزيز'}!</h3>
+    <h3>مبارك يا {name || 'خريجنا العزيز'}!</h3>
     <p>تمت الموافقة على طلبك. نتمنى لك حفل تخرج مليئاً بالفرح والذكريات الجميلة.</p>
-    <div className="celebration-sparkles" aria-hidden="true">✦ ✧ ✨ ✧ ✦</div>
+    <div className="celebration-sparkles" aria-hidden="true">✦ · ✧ · ✦</div>
   </section>;
 }
 
@@ -505,8 +505,8 @@ function EntryTicketCard({ ticket, application, batchName }) {
   }, [verifyUrl]);
   const isGraduate = ticket.ticket_type === 'graduate' || ticket.ticket_number === 0;
   return <article className={`entry-ticket-card ${isGraduate ? 'graduate-ticket' : 'companion-ticket'}`}>
-    <div className="entry-ticket-topline"><img src="/brand/ssu-emblem.png" alt="" /><div><strong>اتحاد طلبة سوريا</strong><span>فرع محافظة اللاذقية · {batchName || 'دفعة 2026'}</span></div></div>
-    <div className="ticket-card-title"><span>{isGraduate ? 'بطاقة دخول الخريج' : `بطاقة دخول المرافق ${ticket.ticket_number}`}</span><strong>{isGraduate ? '🎓' : '🎟️'}</strong></div>
+    <div className="entry-ticket-topline"><img src="/brand/ssu-emblem.png" alt="شعار اتحاد طلبة سوريا" /><div className="ticket-brand-copy"><strong>اتحاد طلبة سوريا</strong><span>فرع محافظة اللاذقية</span></div><span className="ticket-batch-pill">{batchName || 'دفعة 2026'}</span></div>
+    <div className="ticket-card-title"><span>{isGraduate ? 'بطاقة دخول الخريج' : `بطاقة دخول المرافق ${ticket.ticket_number}`}</span><strong className="ticket-type-pill">{isGraduate ? 'خريج' : 'مرافق'}</strong></div>
     <h4>{application.full_name}</h4>
     <p className="ticket-program">{application.department || '—'}{application.specialization && application.specialization !== 'لا يوجد اختصاص' ? ` · ${application.specialization}` : ''}</p>
     <div className="ticket-data-grid">
@@ -523,7 +523,7 @@ function VerifiedTicket({ verification }) {
   const isGraduate = ticket.type === 'graduate' || ticket.number === 0;
   return <div className="panel verified-ticket-panel">
     <div className="verified-ticket-status"><span className="verified-status-icon">✓</span><div><strong>البطاقة صالحة للدخول</strong><small>تم التحقق من رمز QR وموافقة الطلب</small></div><span className="status-badge approved">مقبول</span></div>
-    <div className="verified-ticket-kind"><span>{isGraduate ? '🎓' : '🎟️'}</span><div><small>نوع البطاقة</small><h2>{isGraduate ? 'بطاقة الخريج' : `بطاقة المرافق رقم ${ticket.number}`}</h2></div></div>
+    <div className="verified-ticket-kind"><span className="verified-ticket-type-mark">{isGraduate ? 'خريج' : 'مرافق'}</span><div><small>نوع البطاقة</small><h2>{isGraduate ? 'بطاقة الخريج' : `بطاقة المرافق رقم ${ticket.number}`}</h2></div></div>
     <div className="verified-person-name"><span>اسم الخريج</span><strong>{graduate.full_name}</strong></div>
     <div className="verified-data-grid">
       <div><span>الرقم الجامعي</span><strong>{graduate.university_number || '—'}</strong></div>
@@ -707,6 +707,8 @@ function StaffManagementPanel({ staffUser, catalog, notify }) {
 function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSettings, catalog, catalogError, refreshCatalog, notify, onSignOut }) {
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [applicationsError, setApplicationsError] = useState('');
+  const loadRequestRef = useRef(0);
   const [statusFilter, setStatusFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
@@ -768,11 +770,35 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
   }, [statusFilter, unitFilter, specializationFilter, fromDate, toDate, search]);
 
   const loadApplications = useCallback(async () => {
+    const requestId = ++loadRequestRef.current;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 25000);
     setLoading(true);
-    let query = applyApplicationFilters(supabase.from('applications'));
-    const { data, error, count } = await query.select('*', { count: 'exact' }).order('created_at', { ascending: false }).range(pageNumber * pageSize, pageNumber * pageSize + pageSize - 1);
-    if (error) notify('تعذر تحميل الطلبات: ' + error.message, 'error');
-    setApplications(data || []); setTotalFiltered(count || 0); setLoading(false);
+    setApplicationsError('');
+    try {
+      const query = applyApplicationFilters(supabase.from('applications'));
+      const { data, error, count } = await query
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(pageNumber * pageSize, pageNumber * pageSize + pageSize - 1)
+        .abortSignal(controller.signal);
+      if (requestId !== loadRequestRef.current) return;
+      if (error) throw error;
+      setApplications(data || []);
+      setTotalFiltered(count || 0);
+    } catch (error) {
+      if (requestId !== loadRequestRef.current) return;
+      const message = error?.name === 'AbortError'
+        ? 'استغرق البحث أكثر من 25 ثانية. تحقق من الاتصال ثم أعد المحاولة.'
+        : `تعذر تحميل الطلبات المطابقة: ${error?.message || 'خطأ غير معروف'}`;
+      setApplications([]);
+      setTotalFiltered(0);
+      setApplicationsError(message);
+      notify(message, 'error');
+    } finally {
+      window.clearTimeout(timeoutId);
+      if (requestId === loadRequestRef.current) setLoading(false);
+    }
   }, [applyApplicationFilters, notify, pageNumber]);
   useEffect(() => { loadApplications(); }, [loadApplications]);
   useEffect(() => { if (selected) setSelected(applications.find((item) => item.id === selected.id) || selected); }, [applications]);
@@ -1101,7 +1127,7 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
           <label className="field"><span>إلى تاريخ</span><input type="date" value={toDate} min={fromDate || undefined} onChange={(e) => { setToDate(e.target.value); setPageNumber(0); }} /></label>
           <div className="advanced-filter-actions"><button className="primary-button" type="button" onClick={() => { setPageNumber(0); setSearch(searchInput); }}>تطبيق البحث</button><button className="secondary-button" type="button" onClick={() => { setSearch(''); setSearchInput(''); setStatusFilter('all'); setUnitFilter('all'); setSpecializationFilter('all'); setFromDate(''); setToDate(''); setPageNumber(0); }}>إلغاء الفلاتر</button><button className="refresh-button" type="button" onClick={loadApplications} title="تحديث النتائج">↻</button></div>
         </div>
-        {loading ? <div className="empty-state">جارٍ تحميل الطلبات…</div> : filtered.length === 0 ? <div className="empty-state"><span>⌕</span><strong>لا توجد طلبات مطابقة</strong><p>عدّل البحث أو الفلاتر لعرض نتائج أخرى.</p></div> : <div className="table-scroll"><table className="applications-table"><thead><tr><th>الطالب / الرمز</th><th>الكلية / الاختصاص</th><th>المبلغ</th><th>الحالة</th><th>التاريخ</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : ''} onClick={() => { setSelected(item); setRejectReason(item.rejection_reason || ''); setReceiptLink(''); }}><td><strong>{item.full_name}</strong><small>{item.tracking_code} · {item.university_number}</small><small>{item.phone_number || '—'}</small></td><td><span>{item.department}</span><small>{item.specialization}</small></td><td><strong>{fmt(item.amount_syp)} ل.س</strong><small>{fmt(item.companions)} مرافق · {fmt(item.carried_subjects)} مادة محمولة</small></td><td><span className={`status-badge ${STATUS[item.status]?.className || 'pending'}`}>{STATUS[item.status]?.label || item.status}</span></td><td>{humanDate(item.created_at)}</td></tr>)}</tbody></table></div>}
+        {loading ? <div className="empty-state filter-loading-state" role="status"><span className="filter-spinner" aria-hidden="true" /><strong>{search || statusFilter !== 'all' || unitFilter !== 'all' || specializationFilter !== 'all' || fromDate || toDate ? 'جارٍ البحث عن الطلبات المطابقة…' : 'جارٍ تحميل الطلبات…'}</strong><p>تستغرق الاستجابة عادةً بضع ثوانٍ.</p></div> : applicationsError ? <div className="notice notice-warning filter-error-state" role="alert"><strong>تعذر إكمال البحث</strong><p>{applicationsError}</p><button className="secondary-button" type="button" onClick={loadApplications}>إعادة المحاولة</button></div> : filtered.length === 0 ? <div className="empty-state"><span>⌕</span><strong>لا توجد طلبات مطابقة</strong><p>عدّل البحث أو الفلاتر لعرض نتائج أخرى.</p></div> : <div className="table-scroll"><table className="applications-table"><thead><tr><th>الطالب / الرمز</th><th>الكلية / الاختصاص</th><th>المبلغ</th><th>الحالة</th><th>التاريخ</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : ''} onClick={() => { setSelected(item); setRejectReason(item.rejection_reason || ''); setReceiptLink(''); }}><td><strong>{item.full_name}</strong><small>{item.tracking_code} · {item.university_number}</small><small>{item.phone_number || '—'}</small></td><td><span>{item.department}</span><small>{item.specialization}</small></td><td><strong>{fmt(item.amount_syp)} ل.س</strong><small>{fmt(item.companions)} مرافق · {fmt(item.carried_subjects)} مادة محمولة</small></td><td><span className={`status-badge ${STATUS[item.status]?.className || 'pending'}`}>{STATUS[item.status]?.label || item.status}</span></td><td>{humanDate(item.created_at)}</td></tr>)}</tbody></table></div>}
         <div className="pagination-row"><span>عرض {fmt(filtered.length ? pageNumber * pageSize + 1 : 0)}–{fmt(Math.min((pageNumber + 1) * pageSize, totalFiltered))} من {fmt(totalFiltered)}</span><div><button className="secondary-button" type="button" disabled={pageNumber <= 0 || loading} onClick={() => setPageNumber((old) => Math.max(0, old - 1))}>السابق</button><strong>صفحة {fmt(pageNumber + 1)} من {fmt(Math.max(1, Math.ceil(totalFiltered / pageSize)))}</strong><button className="secondary-button" type="button" disabled={(pageNumber + 1) * pageSize >= totalFiltered || loading} onClick={() => setPageNumber((old) => old + 1)}>التالي</button></div></div>
       </div>
       <div className="panel review-panel">

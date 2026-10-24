@@ -529,3 +529,76 @@ body{background:#fbf5e9;color:#41423b}
 .ticket-download-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;width:100%;margin:12px 0 18px}
 .ticket-download-actions button{min-height:46px;white-space:normal;line-height:1.6}
 @media(max-width:620px){.unit-capacity-editor{grid-template-columns:1fr}.unit-capacity-editor>small{grid-column:1}.unit-capacity-editor>.secondary-button{width:100%}.ticket-download-actions{grid-template-columns:1fr}.ticket-download-actions button{width:100%}.receipt-archive-tools{padding:12px}}
+
+
+/* المرحلة السابعة: إصلاح تداخل رموز الحقول، بطاقات واضحة، PDF منظم وبحث لا يعلق */
+/* لا نضع رموزًا زخرفية فوق النص داخل حقول الإدخال، خصوصًا في RTL على الهاتف. */
+.input-wrap { min-width: 0; }
+.input-wrap input { padding-inline: 14px !important; min-width: 0; width: 100%; }
+.input-icon { display: none !important; }
+/* نجمة زخرفية بخط نظيف بدل رمز ✳ الذي يختلف عرضه بين خطوط الهواتف. */
+.eyebrow-star { display: inline-grid; place-items: center; width: 18px; height: 18px; font-size: 18px; line-height: 1; font-family: Arial, sans-serif; }
+.graduation-hero-art .art-star { font-family: Arial, sans-serif; line-height: 1; text-shadow: 0 2px 8px rgba(169,50,54,.12); }
+.celebration-badge { position: relative; }
+.celebration-cap-shape { display: block; position: relative; width: 36px; height: 28px; }
+.celebration-cap-shape:before { content: ""; position: absolute; left: 0; top: 0; width: 36px; height: 18px; background: linear-gradient(135deg,#a93236,#c85b55); clip-path: polygon(50% 0,100% 42%,50% 84%,0 42%); }
+.celebration-cap-shape:after { content: ""; position: absolute; left: 8px; top: 11px; width: 22px; height: 15px; background: linear-gradient(90deg,#18594b,#2f806a); clip-path: polygon(0 0,100% 0,92% 60%,50% 100%,8% 60%); }
+
+/* بطاقة دخول أكثر هدوءًا: الشعار والنص في مساحتين منفصلتين، بلا إيموجيات تزاحم الاسم. */
+.entry-ticket-card { padding: 16px; min-width: 0; }
+.entry-ticket-topline {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 6px 0 12px;
+  border-bottom: 1px dashed #dccfbc;
+  min-width: 0;
+}
+.entry-ticket-topline > img { grid-column: 1; grid-row: 1; width: 40px; height: 40px; max-width: 40px; object-fit: contain; flex: none; }
+.entry-ticket-topline .ticket-brand-copy { grid-column: 2; grid-row: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; width: 100%; overflow-wrap: anywhere; }
+.entry-ticket-topline .ticket-brand-copy strong { display: block; font-size: 13px; line-height: 1.55; color: #18594b; overflow-wrap: anywhere; }
+.entry-ticket-topline .ticket-brand-copy span { display: block; font-size: 11px; line-height: 1.5; color: #7c8073; overflow-wrap: anywhere; }
+.ticket-batch-pill { grid-column: 1 / -1; grid-row: 2; justify-self: start; max-width: 100%; padding: 4px 9px; border-radius: 20px; background: #f5eee1; color: #6b6d5f; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.ticket-card-title { align-items: center; gap: 8px; margin: 12px 0 5px; line-height: 1.65; min-width: 0; }
+.ticket-card-title > span { min-width: 0; overflow-wrap: anywhere; }
+.ticket-card-title .ticket-type-pill { display: inline-flex; align-items: center; justify-content: center; flex: none; min-width: 54px; border-radius: 7px; padding: 5px 8px; font-family: inherit; font-size: 11px; line-height: 1.3; background: #f6e8e2; color: #a93236; }
+.entry-ticket-card h4 { overflow-wrap: anywhere; word-break: normal; line-height: 1.65; }
+.ticket-program { overflow-wrap: anywhere; word-break: normal; }
+.ticket-data-grid, .ticket-data-grid > div { min-width: 0; }
+.ticket-data-grid strong { overflow-wrap: anywhere; word-break: normal; }
+.ticket-qr-area { min-width: 0; flex-wrap: wrap; }
+.ticket-qr-area > div:not(.ticket-qr-placeholder) { flex: 1 1 105px; }
+.verified-ticket-kind { min-width: 0; }
+.verified-ticket-type-mark { display: inline-flex; flex: 0 0 54px; width: 54px; height: 54px; align-items: center; justify-content: center; border: 1px solid #e5d6be; border-radius: 12px; background: #fff8ed; color: #a93236; font-size: 12px !important; font-weight: 800; }
+
+/* رموز التتبع تبقى دائمًا ضمن البطاقة وعلى شاشات الهاتف الضيقة. */
+.tracking-code-card { width: 100%; min-width: 0; max-width: 100%; overflow: hidden; }
+.tracking-code-card strong, .compact-code strong, .result-code, .review-code { display: block; width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; border-radius: 9px; overflow: hidden; padding-inline: 8px; }
+.result-code { direction: rtl; text-align: right; }
+.result-code strong, .review-code { white-space: normal; overflow-wrap: anywhere; word-break: break-word; direction: ltr; unicode-bidi: plaintext; text-align: center; line-height: 1.6; letter-spacing: .4px; padding-inline: 5px; }
+
+/* حالات التحميل والنتائج الفارغة للفلتر تكون واضحة مع إعادة المحاولة عند الخطأ. */
+.filter-loading-state { min-height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; padding: 24px 16px; }
+.filter-loading-state strong { color: #18594b; font-size: 14px; }
+.filter-loading-state p { margin: 0; color: #7a8177; font-size: 12px; line-height: 1.8; }
+.filter-spinner { width: 30px; height: 30px; border: 3px solid #e7dccc; border-top-color: #18594b; border-radius: 50%; animation: filter-spin .8s linear infinite; }
+@keyframes filter-spin { to { transform: rotate(360deg); } }
+.filter-error-state { display: flex; flex-direction: column; gap: 9px; margin: 16px; overflow-wrap: anywhere; }
+.filter-error-state p { margin: 0; line-height: 1.8; }
+.filter-error-state .secondary-button { align-self: flex-start; }
+
+@media (max-width: 600px) {
+  .entry-ticket-card { padding: 14px; border-radius: 12px; }
+  .entry-ticket-topline { grid-template-columns: 36px minmax(0, 1fr); column-gap: 9px; }
+  .entry-ticket-topline > img { width: 36px; height: 36px; max-width: 36px; }
+  .entry-ticket-topline .ticket-brand-copy strong { font-size: 13px; }
+  .ticket-card-title { font-size: 13px; }
+  .ticket-card-title .ticket-type-pill { min-width: 48px; padding-inline: 6px; }
+  .ticket-data-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tracking-code-card strong, .compact-code strong { font-size: clamp(16px, 5vw, 23px) !important; letter-spacing: 0 !important; }
+  .review-code, .result-code { font-size: 14px; }
+  .filter-error-state .secondary-button { width: 100%; align-self: stretch; }
+}
+@media (prefers-reduced-motion: reduce) { .filter-spinner { animation: none; } }

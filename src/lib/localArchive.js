@@ -11,7 +11,7 @@ function safeName(value, max = 90) {
     .slice(0, max) || 'غير-معروف';
 }
 
-function drawRtl(ctx, text, x, y, maxWidth, size = 32, color = '#203b34', weight = 500) {
+function drawRtl(ctx, text, x, y, maxWidth, size = 32, color = '#203b34', weight = 500, maxLines = 3) {
   ctx.save();
   ctx.direction = 'rtl';
   ctx.textAlign = 'right';
@@ -29,9 +29,9 @@ function drawRtl(ctx, text, x, y, maxWidth, size = 32, color = '#203b34', weight
     } else line = test;
   }
   if (line) lines.push(line);
-  lines.slice(0, 3).forEach((entry, index) => ctx.fillText(entry, x, y + index * (size + 10), maxWidth));
+  lines.slice(0, maxLines).forEach((entry, index) => ctx.fillText(entry, x, y + index * (size + 10), maxWidth));
   ctx.restore();
-  return y + Math.min(lines.length, 3) * (size + 10);
+  return y + Math.min(lines.length, maxLines) * (size + 10);
 }
 
 function drawArchiveCover(application, settings = {}) {
@@ -40,27 +40,30 @@ function drawArchiveCover(application, settings = {}) {
   canvas.height = 1754;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('تعذر تجهيز صفحة بيانات الأرشيف في المتصفح.');
+
   ctx.fillStyle = '#fffdf8';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#18594b'; ctx.fillRect(0, 0, canvas.width, 26);
-  ctx.fillStyle = '#a93236'; ctx.fillRect(0, 26, 330, 12);
-  ctx.fillStyle = '#c3a15c'; ctx.fillRect(330, 26, 280, 12);
+  ctx.fillStyle = '#18594b'; ctx.fillRect(0, 0, canvas.width, 24);
+  ctx.fillStyle = '#a93236'; ctx.fillRect(0, 24, 330, 10);
+  ctx.fillStyle = '#c3a15c'; ctx.fillRect(330, 24, 280, 10);
 
   ctx.save();
-  ctx.direction = 'rtl'; ctx.textAlign = 'right';
-  ctx.fillStyle = '#18594b'; ctx.font = 'bold 48px Arial, Tahoma, sans-serif';
-  ctx.fillText(settings.organizer || 'اتحاد طلبة سوريا – فرع محافظة اللاذقية', 1140, 125, 1060);
-  ctx.fillStyle = '#7a8177'; ctx.font = '30px Arial, Tahoma, sans-serif';
-  ctx.fillText(settings.university_label || 'جامعة اللاذقية', 1140, 178, 1060);
-  ctx.fillStyle = '#a93236'; ctx.font = 'bold 47px Arial, Tahoma, sans-serif';
-  ctx.fillText('ملف أرشفة إيصال دفع', 1140, 282, 1060);
-  ctx.fillStyle = '#64736a'; ctx.font = '29px Arial, Tahoma, sans-serif';
-  ctx.fillText(settings.batch_name || 'دفعة 2026', 1140, 333, 1060);
+  ctx.direction = 'rtl';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#18594b'; ctx.font = 'bold 40px Arial, Tahoma, sans-serif';
+  ctx.fillText(settings.organizer || 'اتحاد طلبة سوريا – فرع محافظة اللاذقية', 1140, 105, 1060);
+  ctx.fillStyle = '#7a8177'; ctx.font = '27px Arial, Tahoma, sans-serif';
+  ctx.fillText(settings.university_label || 'جامعة اللاذقية', 1140, 151, 1060);
+  ctx.fillStyle = '#a93236'; ctx.font = 'bold 39px Arial, Tahoma, sans-serif';
+  ctx.fillText('ملف أرشفة إيصال الدفع', 1140, 221, 1060);
+  ctx.fillStyle = '#64736a'; ctx.font = '25px Arial, Tahoma, sans-serif';
+  ctx.fillText(settings.batch_name || 'دفعة 2026', 1140, 263, 1060);
   ctx.restore();
 
-  ctx.strokeStyle = '#ded7c9'; ctx.lineWidth = 2; ctx.strokeRect(72, 390, 1096, 1185);
-  ctx.fillStyle = '#f3f0e8'; ctx.fillRect(72, 390, 1096, 88);
-  drawRtl(ctx, 'بيانات الطالب والطلب', 1115, 448, 980, 36, '#18594b', 700);
+  ctx.fillStyle = '#f3f0e8'; ctx.fillRect(72, 300, 1096, 62);
+  drawRtl(ctx, 'بيانات الطالب والطلب', 1120, 340, 980, 29, '#18594b', 700);
+
   const fields = [
     ['اسم الطالب', application.full_name],
     ['الرقم الجامعي', application.university_number],
@@ -69,19 +72,42 @@ function drawArchiveCover(application, settings = {}) {
     ['الاختصاص', application.specialization || 'لا يوجد اختصاص'],
     ['عدد المواد المحمولة', application.carried_subjects ?? 0],
     ['عدد المرافقين', application.companions ?? 0],
+    ['إجمالي عدد الحضور', Number(application.companions || 0) + 1],
     ['المبلغ المستحق', `${new Intl.NumberFormat('ar-SY').format(Number(application.amount_syp || 0))} ل.س`],
     ['رمز التتبع', application.tracking_code],
     ['تاريخ التسجيل', application.created_at ? new Date(application.created_at).toLocaleString('ar-SY') : '—'],
     ['الحالة وقت الأرشفة', application.status === 'approved' ? 'مقبول' : application.status === 'rejected' ? 'مرفوض' : 'قيد التدقيق'],
   ];
-  let y = 550;
-  for (const [label, value] of fields) {
-    drawRtl(ctx, label, 1115, y, 950, 29, '#7a8177', 500);
-    y = drawRtl(ctx, value, 1115, y + 42, 950, 34, '#203b34', 700) + 28;
-    ctx.strokeStyle = '#eee7dc'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(125, y - 6); ctx.lineTo(1115, y - 6); ctx.stroke();
-  }
-  ctx.fillStyle = '#f8f1e8'; ctx.fillRect(72, 1610, 1096, 74);
-  drawRtl(ctx, 'تأتي صفحات إيصال التحويل الأصلي بعد هذه الصفحة. احتفظ بنسخة احتياطية مستقلة.', 1115, 1655, 1000, 24, '#8c3b34', 600);
+  const gridTop = 385;
+  const cardWidth = 535;
+  const cardHeight = 145;
+  const gapX = 24;
+  const gapY = 14;
+  const leftX = 73;
+  const rightX = leftX + cardWidth + gapX;
+
+  fields.forEach(([label, value], index) => {
+    const row = Math.floor(index / 2);
+    const isRightCell = index % 2 === 0;
+    const x = isRightCell ? rightX : leftX;
+    const y = gridTop + row * (cardHeight + gapY);
+    ctx.fillStyle = index % 2 === 0 ? '#fffaf1' : '#ffffff';
+    ctx.strokeStyle = '#e2d8c7';
+    ctx.lineWidth = 2;
+    ctx.fillRect(x, y, cardWidth, cardHeight);
+    ctx.strokeRect(x, y, cardWidth, cardHeight);
+    drawRtl(ctx, label, x + cardWidth - 22, y + 37, cardWidth - 44, 22, '#7a8177', 600, 1);
+    drawRtl(ctx, value, x + cardWidth - 22, y + 82, cardWidth - 44, 27, '#203b34', 700, 2);
+  });
+
+  const footerY = 1435;
+  ctx.fillStyle = '#f8f1e8';
+  ctx.fillRect(72, footerY, 1096, 220);
+  ctx.fillStyle = '#a93236';
+  ctx.fillRect(72, footerY, 8, 220);
+  drawRtl(ctx, 'صفحات إيصال التحويل الأصلي مرفقة بعد صفحة البيانات هذه.', 1120, footerY + 54, 1000, 27, '#8c3b34', 700);
+  drawRtl(ctx, 'يُرجى الاحتفاظ بنسخة احتياطية مستقلة من ملف الأرشيف.', 1120, footerY + 105, 1000, 24, '#5f6e61', 500);
+  drawRtl(ctx, `رمز التتبع: ${application.tracking_code || '—'}`, 1120, footerY + 159, 1000, 24, '#18594b', 700);
   return canvas;
 }
 
