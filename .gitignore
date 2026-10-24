@@ -5,3 +5,4 @@ dist
 .DS_Store
 .env.archive.local
 receipt-archive/
+/latakia-graduation-registration/
