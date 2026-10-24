@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import QRCode from 'qrcode';
 import { anonKeyValue, configurationProblem, functionUrl, isConfigured, supabase } from './lib/supabase';
 
 const DEFAULT_SETTINGS = {
@@ -10,116 +11,268 @@ const DEFAULT_SETTINGS = {
   student_fee: 0,
   companion_fee: 0,
   max_companions: 4,
+  max_carried_subjects: 5,
   shamcash_account: '',
-  payment_instructions: 'حوّل المبلغ الإجمالي إلى حساب شام كاش الموضح أدناه، ثم ارفع إيصال التحويل بصيغة PDF.',
+  payment_instructions: 'تأكد من اسم المستفيد والمبلغ قبل تأكيد التحويل، واحتفظ بفاتورة التحويل الأصلية بصيغة PDF.',
   qr_image_url: '',
+  payment_images: [],
 };
 
 const STATUS = {
-  pending: { label: 'قيد التدقيق', className: 'pending', icon: '◷' },
+  awaiting_payment: { label: 'بانتظار الدفع والفاتورة', className: 'pending', icon: '◷' },
+  pending: { label: 'الفاتورة قيد التدقيق', className: 'pending', icon: '◷' },
   approved: { label: 'تمت الموافقة', className: 'approved', icon: '✓' },
   rejected: { label: 'مرفوض', className: 'rejected', icon: '!' },
 };
 
 const fmt = (value) => new Intl.NumberFormat('ar-SY').format(Number(value || 0));
 const humanDate = (value) => value ? new Date(value).toLocaleString('ar-SY', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+const safeSessionGet = () => {
+  try {
+    const value = sessionStorage.getItem('latakia_payment_application');
+    return value ? JSON.parse(value) : null;
+  } catch { return null; }
+};
 
 function App() {
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
-  const [page, setPage] = useState('register');
+  const [catalog, setCatalog] = useState({ units: [], specializations: [] });
+  const [catalogLoaded, setCatalogLoaded] = useState(false);
+  const [catalogError, setCatalogError] = useState('');
+  const ticketTokenFromUrl = new URLSearchParams(window.location.search).get('ticket') || '';
+  const [page, setPage] = useState(() => ticketTokenFromUrl ? 'verify' : 'register');
+  const [registrationStage, setRegistrationStage] = useState(() => safeSessionGet() ? 'code' : 'details');
   const [toast, setToast] = useState(null);
   const [submitting, setSubmitting] = useState(false);
-  const [success, setSuccess] = useState(null);
+  const [receiptSubmitting, setReceiptSubmitting] = useState(false);
+  const [paymentApplication, setPaymentApplication] = useState(() => safeSessionGet());
+  const [codeCopied, setCodeCopied] = useState(false);
+  const [form, setForm] = useState({ full_name: '', university_number: '', phone_number: '', carried_subjects: '0', academic_unit_id: '', academic_specialization_id: '', companions: '0' });
+  const [paymentReceipt, setPaymentReceipt] = useState(null);
   const [trackingCode, setTrackingCode] = useState('');
-  const [trackingUni, setTrackingUni] = useState('');
   const [trackingBusy, setTrackingBusy] = useState(false);
   const [trackingResult, setTrackingResult] = useState(null);
-  const [form, setForm] = useState({ full_name: '', university_number: '', department: '', specialization: '', companions: '0', receipt: null });
+  const [trackReceipt, setTrackReceipt] = useState(null);
+  const [trackReceiptBusy, setTrackReceiptBusy] = useState(false);
+  const [ticketVerification, setTicketVerification] = useState(null);
+  const [ticketVerifyBusy, setTicketVerifyBusy] = useState(false);
+  const [ticketVerifyError, setTicketVerifyError] = useState('');
   const [staffUser, setStaffUser] = useState(null);
+  const [staffRole, setStaffRole] = useState(null);
   const [authChecking, setAuthChecking] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
   const notify = useCallback((message, kind = 'info') => {
     setToast({ message, kind });
-    window.setTimeout(() => setToast(null), 4200);
+    window.setTimeout(() => setToast(null), 4500);
   }, []);
 
   const loadSettings = useCallback(async () => {
     if (!isConfigured) { setSettingsLoaded(true); return; }
     const { data, error } = await supabase.from('event_settings').select('*').eq('id', 1).maybeSingle();
-    if (data) setSettings({ ...DEFAULT_SETTINGS, ...data });
+    if (data) setSettings({ ...DEFAULT_SETTINGS, ...data, payment_images: Array.isArray(data.payment_images) ? data.payment_images : [] });
     if (error) console.error('settings:', error.message);
     setSettingsLoaded(true);
   }, []);
 
-  useEffect(() => { loadSettings(); }, [loadSettings]);
+  const loadCatalog = useCallback(async () => {
+    if (!isConfigured) { setCatalogLoaded(true); return; }
+    const [unitsResult, specsResult] = await Promise.all([
+      supabase.from('academic_units').select('id,name,unit_type,is_open,created_at').order('name'),
+      supabase.from('academic_specializations').select('id,unit_id,name,is_open,created_at').order('name'),
+    ]);
+    if (unitsResult.error || specsResult.error) {
+      const error = unitsResult.error || specsResult.error;
+      setCatalogError(error.message || 'تعذر تحميل قوائم الكليات والاختصاصات.');
+      console.error('catalog:', error.message);
+    } else {
+      setCatalog({ units: unitsResult.data || [], specializations: specsResult.data || [] });
+      setCatalogError('');
+    }
+    setCatalogLoaded(true);
+  }, []);
+
+  useEffect(() => { loadSettings(); loadCatalog(); }, [loadSettings, loadCatalog]);
 
   useEffect(() => {
-    if (!isConfigured) return;
+    if (page !== 'verify') return undefined;
+    if (!ticketTokenFromUrl) { setTicketVerifyError('لم يتم العثور على رمز البطاقة في الرابط.'); return undefined; }
+    if (!isConfigured) { setTicketVerifyError('خدمة التحقق غير متصلة حالياً.'); return undefined; }
     let alive = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (alive && data.session) setStaffUser(data.session.user);
+    setTicketVerifyBusy(true);
+    setTicketVerifyError('');
+    fetch(functionUrl('verify-ticket'), {
+      method: 'POST',
+      headers: { apikey: anonKeyValue, Authorization: `Bearer ${anonKeyValue}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticket_token: ticketTokenFromUrl }),
+    }).then(async (response) => {
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.valid) throw new Error(result.error || 'هذه البطاقة غير صالحة.');
+      if (alive) setTicketVerification(result);
+    }).catch((error) => {
+      if (alive) setTicketVerifyError(error.message || 'تعذّر التحقق من البطاقة.');
+    }).finally(() => { if (alive) setTicketVerifyBusy(false); });
+    return () => { alive = false; };
+  }, [page, ticketTokenFromUrl]);
+
+  const loadStaffRole = useCallback(async (userId) => {
+    if (!isConfigured || !userId) { setStaffRole(null); return; }
+    const { data } = await supabase.from('staff_roles').select('role').eq('user_id', userId).maybeSingle();
+    setStaffRole(data?.role || null);
+  }, []);
+
+  useEffect(() => {
+    if (!isConfigured) return undefined;
+    let alive = true;
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (!alive || !data.session?.user) return;
+      setStaffUser(data.session.user);
+      const { data: role } = await supabase.from('staff_roles').select('role').eq('user_id', data.session.user.id).maybeSingle();
+      if (alive) setStaffRole(role?.role || null);
     });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setStaffUser(session?.user ?? null);
-      if (!session) setPage((current) => current === 'admin' ? 'staff' : current);
+      if (!session?.user) {
+        setStaffRole(null);
+        setPage((current) => current === 'admin' ? 'staff' : current);
+      } else {
+        window.setTimeout(() => loadStaffRole(session.user.id), 0);
+      }
     });
     return () => { alive = false; listener.subscription.unsubscribe(); };
-  }, []);
-
-  const companions = Math.max(0, Number.parseInt(form.companions || '0', 10) || 0);
-  const total = Number(settings.student_fee || 0) + companions * Number(settings.companion_fee || 0);
-  const registrationUnavailable = !settings.registration_open;
+  }, [loadStaffRole]);
 
   const setField = (key, value) => setForm((old) => ({ ...old, [key]: value }));
+  const companions = Math.max(0, Number.parseInt(form.companions || '0', 10) || 0);
+  const carriedSubjects = Math.max(0, Number.parseInt(form.carried_subjects || '0', 10) || 0);
+  const total = Number(settings.student_fee || 0) + companions * Number(settings.companion_fee || 0);
+  const registrationUnavailable = !settings.registration_open;
+  const allSpecsForUnit = catalog.specializations.filter((item) => item.unit_id === form.academic_unit_id);
+  const openSpecsForUnit = allSpecsForUnit.filter((item) => item.is_open);
+  const selectedUnit = catalog.units.find((unit) => unit.id === form.academic_unit_id) || null;
+  const openUnits = catalog.units.filter((unit) => unit.is_open && (() => {
+    const specs = catalog.specializations.filter((item) => item.unit_id === unit.id);
+    return specs.length === 0 || specs.some((item) => item.is_open);
+  })());
+  const selectedUnitRequiresSpecialization = allSpecsForUnit.length > 0;
+  const amountSummary = useMemo(() => ({ student: Number(settings.student_fee || 0), companion: Number(settings.companion_fee || 0), total }), [settings, total]);
 
-  async function handleSubmit(event) {
+  async function copyTrackingCode() {
+    if (!paymentApplication?.tracking_code) return;
+    try {
+      await navigator.clipboard.writeText(paymentApplication.tracking_code);
+      setCodeCopied(true);
+      notify('تم نسخ رمز التتبع. احتفظ به واكتبه في ملاحظات التحويل.', 'success');
+    } catch {
+      notify('تعذر النسخ التلقائي. اضغط مطولاً على الرمز لنسخه، ثم فعّل مربع التأكيد.', 'info');
+    }
+  }
+
+  async function handleCreateRegistration(event) {
     event.preventDefault();
-    if (!isConfigured) return notify('اربط المشروع بـ Supabase أولاً لتفعيل التسجيل الحقيقي. راجع ملف README.', 'error');
-    if (!settings.registration_open) return notify('التسجيل مغلق حالياً.', 'error');
-    if (!form.receipt) return notify('يرجى إرفاق إيصال الدفع بصيغة PDF.', 'error');
-    if (form.receipt.type !== 'application/pdf' || !form.receipt.name.toLowerCase().endsWith('.pdf')) return notify('الملف المرفق يجب أن يكون PDF.', 'error');
-    if (form.receipt.size > 5 * 1024 * 1024) return notify('حجم الإيصال يجب ألا يتجاوز 5 ميغابايت.', 'error');
+    if (!isConfigured) return notify('الاتصال بقاعدة البيانات غير مكتمل. راجع متغيرات Supabase في إعدادات النشر.', 'error');
+    if (!settings.registration_open) return notify('التسجيل العام مغلق حالياً.', 'error');
+    if (!form.full_name.trim().split(/\s+/).length || form.full_name.trim().split(/\s+/).length < 3) return notify('يرجى إدخال الاسم الثلاثي كاملاً.', 'error');
+    if (!form.academic_unit_id) return notify('اختر الكلية أو المعهد من القائمة.', 'error');
+    if (selectedUnitRequiresSpecialization && !form.academic_specialization_id) return notify('اختر الاختصاص من القائمة.', 'error');
+    if (carriedSubjects > Number(settings.max_carried_subjects)) return notify(`الحد الأقصى للمواد المحمولة هو ${settings.max_carried_subjects}.`, 'error');
     if (companions > Number(settings.max_companions)) return notify(`الحد الأقصى للمرافقين هو ${settings.max_companions}.`, 'error');
     setSubmitting(true);
     try {
-      const payload = new FormData();
-      ['full_name', 'university_number', 'department', 'specialization'].forEach((key) => payload.append(key, form[key].trim()));
-      payload.append('companions', String(companions));
-      payload.append('receipt', form.receipt);
+      const payload = {
+        full_name: form.full_name.trim().replace(/\s+/g, ' '),
+        university_number: form.university_number.trim(),
+        phone_number: form.phone_number.trim(),
+        carried_subjects: carriedSubjects,
+        academic_unit_id: form.academic_unit_id,
+        academic_specialization_id: form.academic_specialization_id || null,
+        companions,
+      };
       const response = await fetch(functionUrl('submit-application'), {
         method: 'POST',
-        headers: { apikey: anonKeyValue, Authorization: `Bearer ${anonKeyValue}` },
-        body: payload,
+        headers: { apikey: anonKeyValue, Authorization: `Bearer ${anonKeyValue}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || 'تعذر إرسال الطلب. حاول مجدداً.');
-      setSuccess({ ...result, university_number: form.university_number });
-      setForm({ full_name: '', university_number: '', department: '', specialization: '', companions: '0', receipt: null });
-      event.target.reset();
-      notify('تم إرسال طلبك بنجاح.', 'success');
+      if (!response.ok) throw new Error(result.error || 'تعذر إنشاء الطلب. حاول مجدداً.');
+      const created = { tracking_code: result.tracking_code, amount_syp: result.amount_syp, university_number: payload.university_number, status: result.status };
+      setPaymentApplication(created);
+      try { sessionStorage.setItem('latakia_payment_application', JSON.stringify(created)); } catch { /* browser storage can be disabled */ }
+      setCodeCopied(false);
+      setPaymentReceipt(null);
+      setRegistrationStage('code');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      notify('تم حفظ بياناتك وحساب الرسوم. انسخ رمز التتبع قبل الدفع.', 'success');
     } catch (error) {
-      notify(error.message || 'حدث خطأ أثناء الإرسال.', 'error');
+      notify(error.message || 'حدث خطأ أثناء إنشاء الطلب.', 'error');
     } finally { setSubmitting(false); }
+  }
+
+  async function uploadReceiptForApplication(application, file) {
+    if (!application?.tracking_code) throw new Error('رمز التتبع غير موجود. أعد إدخاله وحاول مجدداً.');
+    if (!file) throw new Error('اختر فاتورة التحويل بصيغة PDF.');
+    if (file.type !== 'application/pdf' || !file.name.toLowerCase().endsWith('.pdf')) throw new Error('الفاتورة يجب أن تكون بصيغة PDF فقط.');
+    if (file.size <= 0 || file.size > 5 * 1024 * 1024) throw new Error('حجم الفاتورة يجب ألا يتجاوز 5 ميغابايت.');
+    const payload = new FormData();
+    payload.append('tracking_code', application.tracking_code.trim().toUpperCase());
+    payload.append('receipt', file);
+    const response = await fetch(functionUrl('upload-payment-receipt'), {
+      method: 'POST',
+      headers: { apikey: anonKeyValue, Authorization: `Bearer ${anonKeyValue}` },
+      body: payload,
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || 'تعذر رفع الفاتورة. حاول مجدداً.');
+    return result;
+  }
+
+  async function handleReceiptUpload(event) {
+    event.preventDefault();
+    if (!paymentApplication) return notify('لم يتم العثور على طلب بانتظار الدفع.', 'error');
+    if (!codeCopied) return notify('انسخ رمز التتبع أولاً ثم تابع رفع الفاتورة.', 'error');
+    setReceiptSubmitting(true);
+    try {
+      await uploadReceiptForApplication(paymentApplication, paymentReceipt);
+      const finished = { ...paymentApplication, status: 'pending' };
+      setPaymentApplication(finished);
+      setRegistrationStage('done');
+      try { sessionStorage.removeItem('latakia_payment_application'); } catch { /* ignore */ }
+      setPaymentReceipt(null);
+      notify('تم استلام الفاتورة بنجاح، والطلب الآن قيد التدقيق.', 'success');
+    } catch (error) { notify(error.message || 'تعذر رفع الفاتورة.', 'error'); }
+    finally { setReceiptSubmitting(false); }
   }
 
   async function handleTrack(event) {
     event.preventDefault();
     if (!isConfigured) return notify('تتبع الطلب متاح بعد إعداد Supabase ونشر الوظائف الخلفية.', 'error');
-    setTrackingBusy(true); setTrackingResult(null);
+    setTrackingBusy(true); setTrackingResult(null); setTrackReceipt(null);
     try {
       const response = await fetch(functionUrl('track-application'), {
         method: 'POST',
         headers: { apikey: anonKeyValue, Authorization: `Bearer ${anonKeyValue}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tracking_code: trackingCode.trim().toUpperCase(), university_number: trackingUni.trim() }),
+        body: JSON.stringify({ tracking_code: trackingCode.trim().toUpperCase() }),
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || 'لم يتم العثور على طلب مطابق. تحقق من البيانات.');
       setTrackingResult(result.application);
     } catch (error) { notify(error.message || 'تعذر تتبع الطلب.', 'error'); }
     finally { setTrackingBusy(false); }
+  }
+
+  async function handleTrackReceiptUpload(event) {
+    event.preventDefault();
+    if (!trackingResult) return;
+    setTrackReceiptBusy(true);
+    try {
+      await uploadReceiptForApplication({ tracking_code: trackingResult.tracking_code }, trackReceipt);
+      setTrackingResult((old) => ({ ...old, status: 'pending', has_receipt: true }));
+      setTrackReceipt(null);
+      notify('تم رفع الفاتورة. أصبح الطلب قيد التدقيق.', 'success');
+    } catch (error) { notify(error.message || 'تعذر رفع الفاتورة.', 'error'); }
+    finally { setTrackReceiptBusy(false); }
   }
 
   async function handleLogin(event) {
@@ -134,23 +287,23 @@ function App() {
         await supabase.auth.signOut();
         throw new Error('هذا الحساب غير مخوّل للوصول إلى لوحة الفريق. اطلب من مدير النظام إضافته إلى فريق المراجعة.');
       }
-      setStaffUser(data.user); setPage('admin'); notify('مرحباً بك في لوحة المراجعة.', 'success');
+      setStaffUser(data.user); setStaffRole(role.role); setPage('admin'); notify('مرحباً بك في لوحة المراجعة.', 'success');
     } catch (error) { notify(error.message || 'تعذر تسجيل الدخول.', 'error'); }
     finally { setAuthChecking(false); }
   }
 
   async function signOut() {
     await supabase.auth.signOut();
-    setStaffUser(null); setPage('staff');
+    setStaffUser(null); setStaffRole(null); setPage('staff');
   }
 
-  const amountSummary = useMemo(() => ({ student: Number(settings.student_fee || 0), companion: Number(settings.companion_fee || 0), total }), [settings, total]);
+  const paymentImages = Array.isArray(settings.payment_images) ? settings.payment_images : [];
 
   return <div className="app-shell">
-    <div className="topline"><div className="container topline-inner"><span><i className="dot" /> اتحاد طلبة سوريا</span><span>نحو مستقبل يصنعه الشباب</span></div></div>
+    <div className="topline"><div className="container topline-inner"><span><i className="dot" /> اتحاد طلبة سوريا</span><span>دفعة التخرج 2026</span></div></div>
     <header className="site-header">
       <div className="container header-inner">
-        <button className="brand" onClick={() => setPage('register')} aria-label="العودة إلى الرئيسية">
+        <button className="brand" onClick={() => { setPage('register'); setRegistrationStage(paymentApplication ? registrationStage : 'details'); }} aria-label="العودة إلى الرئيسية">
           <img className="brand-logo" src="/brand/ssu-emblem.png" alt="شعار اتحاد طلبة سوريا" />
           <div className="brand-copy"><strong>{settings.organizer || DEFAULT_SETTINGS.organizer}</strong><span>{settings.university_label || DEFAULT_SETTINGS.university_label}</span></div>
         </button>
@@ -169,87 +322,156 @@ function App() {
           <div className="container hero-content">
             <div className="hero-copy">
               <div className="eyebrow"><span className="eyebrow-star">✳</span> لحظة تستحق أن تُخلّد</div>
-              <h1>{settings.event_title || 'التسجيل لحفلات التخرج'}<br /><em>تبدأ من هنا.</em></h1>
-              <p>أكمل بياناتك الجامعية، ثبّت رسومك، وارفع إيصال الدفع لمتابعة طلب التسجيل لحفل التخرج بكل سهولة.</p>
-              <div className="hero-points"><span><b>01</b> تعبئة البيانات</span><span><b>02</b> دفع الرسوم</span><span><b>03</b> تدقيق الطلب</span></div>
+              <h1>{settings.event_title || 'التسجيل لحفلات التخرج'}<br /><em>دفعة 2026</em></h1>
+              <p>اتبع الخطوات بالترتيب، وانسخ رمز التتبع قبل الدفع. لن تُقبل أي فاتورة لا تتضمن رمز التتبع في ملاحظات تحويل شام كاش.</p>
+              <div className="hero-points"><span><b>01</b> بيانات الطالب</span><span><b>02</b> رمز التتبع</span><span><b>03</b> الدفع والفاتورة</span></div>
             </div>
-            <div className="hero-art identity-banner-wrap">
-              <img src="/brand/ssu-identity-banner.jpg" alt="هوية اتحاد طلبة سوريا: نحو مستقبل يصنعه الشباب" />
+            <div className="hero-art graduation-hero-art" aria-label="قبعة التخرج ودفعة 2026">
+              <div className="orbit" /><div className="orbit orbit-two" />
+              <span className="art-star star-a">✦</span><span className="art-star star-b">✳</span><span className="art-star star-c">✧</span>
+              <div className="cap-icon"><div className="cap-top" /><div className="cap-base" /><div className="cap-tassel" /></div>
+              <div className="art-caption"><span>GRADUATION CLASS</span><strong>2026</strong><small>دفعة التخرج</small></div>
             </div>
           </div>
-          <div className="hero-bottom-line"><div className="container"><span>رحلتك الجامعية تستحق احتفالاً يليق بها</span><span className="line-decoration" /></div></div>
+          <div className="hero-bottom-line"><div className="container"><span>اتحاد طلبة سوريا · فرع محافظة اللاذقية</span><span className="line-decoration" /></div></div>
         </section>
 
-        <section className="container content-grid" id="registration">
+        {registrationStage === 'details' && <section className="container content-grid" id="registration">
           <div className="form-column">
-            <div className="section-heading"><div><span className="section-index">01 / التسجيل</span><h2>بيانات الطالب</h2><p>يرجى إدخال المعلومات تماماً كما تظهر في سجلك الجامعي.</p></div><div className="heading-icon">▤</div></div>
-            {!isConfigured && <div className="notice notice-warning"><span className="notice-icon">ⓘ</span><div><strong>الموقع في وضع الإعداد</strong><p>{configurationProblem === 'invalid-url' ? 'عنوان Supabase في إعدادات النشر غير صحيح. راجع VITE_SUPABASE_URL في Cloudflare.' : 'الواجهة جاهزة للمعاينة، لكن حفظ الطلبات ورفع الملفات يحتاج إعداد متغيرات Supabase في Cloudflare.'}</p></div></div>}
-            {registrationUnavailable && <div className="notice notice-info"><span className="notice-icon">◷</span><div><strong>التسجيل غير مفتوح حالياً</strong><p>سيظهر نموذج التسجيل بشكل فعّال بعد أن يفتح فريق التنظيم التسجيل من لوحة التحكم.</p></div></div>}
-            <form className="panel registration-form" onSubmit={handleSubmit}>
-              <div className="form-panel-title"><span className="step-circle">1</span><div><strong>المعلومات الشخصية والجامعية</strong><small>جميع الحقول التالية مطلوبة</small></div></div>
+            <div className="section-heading"><div><span className="section-index">01 / التسجيل</span><h2>بيانات الطالب</h2><p>أدخل معلوماتك بالتسلسل كما تظهر في سجلك الجامعي.</p></div><div className="heading-icon">▤</div></div>
+            {!isConfigured && <div className="notice notice-warning"><span className="notice-icon">ⓘ</span><div><strong>الموقع في وضع الإعداد</strong><p>{configurationProblem === 'invalid-url' ? 'عنوان Supabase في إعدادات النشر غير صحيح.' : 'الاتصال بقاعدة البيانات مطلوب لحفظ الطلبات. راجع متغيرات Supabase في إعدادات Cloudflare.'}</p></div></div>}
+            {!catalogLoaded && <div className="notice notice-info">جارٍ تحميل قوائم الكليات والمعاهد…</div>}
+            {catalogError && <div className="notice notice-warning"><strong>تعذر تحميل قائمة الكليات والمعاهد</strong><p>يجب تطبيق ترقية قاعدة البيانات 002 من SQL Editor في Supabase. تفاصيل النظام: {catalogError}</p></div>}
+            {registrationUnavailable && <div className="notice notice-info"><span className="notice-icon">◷</span><div><strong>التسجيل غير مفتوح حالياً</strong><p>يفتح المدير التسجيل العام ثم يفتح الكليات والمعاهد والاختصاصات المطلوبة.</p></div></div>}
+            {settings.registration_open && openUnits.length === 0 && !catalogError && <div className="notice notice-warning"><strong>لا توجد كلية أو معهد مفتوح للتسجيل</strong><p>يرجى مراجعة قوائم الكليات والمعاهد أو انتظار فتح التسجيل من الإدارة.</p></div>}
+            <form className="panel registration-form" onSubmit={handleCreateRegistration}>
+              <div className="form-panel-title"><span className="step-circle">1</span><div><strong>المعلومات الشخصية</strong><small>ابدأ ببيانات التواصل الأساسية</small></div></div>
               <div className="field-grid">
                 <label className="field field-full"><span>الاسم الثلاثي <b>*</b></span><div className="input-wrap"><span className="input-icon">♙</span><input required minLength="5" maxLength="120" value={form.full_name} onChange={(e) => setField('full_name', e.target.value)} placeholder="مثال: أحمد محمد علي" autoComplete="name" disabled={registrationUnavailable} /></div></label>
                 <label className="field"><span>الرقم الجامعي <b>*</b></span><div className="input-wrap"><span className="input-icon">№</span><input required maxLength="32" value={form.university_number} onChange={(e) => setField('university_number', e.target.value)} placeholder="أدخل رقمك الجامعي" disabled={registrationUnavailable} /></div></label>
-                <label className="field"><span>القسم <b>*</b></span><div className="input-wrap"><span className="input-icon">▤</span><input required maxLength="100" value={form.department} onChange={(e) => setField('department', e.target.value)} placeholder="اسم القسم" disabled={registrationUnavailable} /></div></label>
-                <label className="field field-full"><span>الاختصاص <b>*</b></span><div className="input-wrap"><span className="input-icon">⌘</span><input required maxLength="100" value={form.specialization} onChange={(e) => setField('specialization', e.target.value)} placeholder="مثال: هندسة البرمجيات" disabled={registrationUnavailable} /></div></label>
+                <label className="field"><span>رقم الهاتف للتواصل <b>*</b></span><div className="input-wrap"><span className="input-icon">☎</span><input required type="tel" maxLength="20" value={form.phone_number} onChange={(e) => setField('phone_number', e.target.value)} placeholder="09xxxxxxxx" autoComplete="tel" disabled={registrationUnavailable} /></div></label>
               </div>
               <div className="form-divider" />
-              <div className="form-panel-title"><span className="step-circle">2</span><div><strong>عدد المرافقين والرسوم</strong><small>سيُحسب المبلغ الإجمالي تلقائياً</small></div></div>
-              <div className="companion-row">
-                <div><strong>عدد المرافقين</strong><small>الحد الأقصى: {settings.max_companions} مرافقين</small></div>
-                <div className="counter"><button type="button" onClick={() => setField('companions', String(Math.max(0, companions - 1)))} disabled={registrationUnavailable || companions <= 0} aria-label="إنقاص عدد المرافقين">−</button><output>{companions}</output><button type="button" onClick={() => setField('companions', String(Math.min(Number(settings.max_companions), companions + 1)))} disabled={registrationUnavailable || companions >= Number(settings.max_companions)} aria-label="زيادة عدد المرافقين">+</button></div>
-              </div>
-              <div className="price-summary">
-                <div><span>رسوم تسجيل الطالب</span><strong>{fmt(amountSummary.student)} <small>ل.س</small></strong></div>
-                <div><span>رسوم المرافق الواحد</span><strong>{fmt(amountSummary.companion)} <small>ل.س</small></strong></div>
-                <div className="price-total"><span>المبلغ الإجمالي المطلوب</span><strong>{fmt(amountSummary.total)} <small>ل.س</small></strong></div>
+              <div className="form-panel-title"><span className="step-circle">2</span><div><strong>المواد المحمولة والجهة الدراسية</strong><small>القوائم يحددها فريق التنظيم</small></div></div>
+              <div className="field-grid">
+                <label className="field field-full"><span>عدد المواد المحمولة <b>*</b></span><div className="input-wrap"><span className="input-icon">№</span><input required type="number" inputMode="numeric" min="0" max={settings.max_carried_subjects} step="1" value={form.carried_subjects} onChange={(e) => setField('carried_subjects', e.target.value)} disabled={registrationUnavailable} /></div><small className="field-help">الحد الأقصى المسموح: {fmt(settings.max_carried_subjects)} مادة.</small></label>
+                <label className="field field-full"><span>الكلية أو المعهد <b>*</b></span><select required value={form.academic_unit_id} onChange={(e) => setForm((old) => ({ ...old, academic_unit_id: e.target.value, academic_specialization_id: '' }))} disabled={registrationUnavailable || openUnits.length === 0}><option value="">اختر الكلية أو المعهد</option>{openUnits.map((unit) => <option value={unit.id} key={unit.id}>{unit.unit_type === 'institute' ? 'معهد' : 'كلية'} — {unit.name}</option>)}</select></label>
+                {selectedUnit && selectedUnitRequiresSpecialization && <label className="field field-full"><span>الاختصاص <b>*</b></span><select required value={form.academic_specialization_id} onChange={(e) => setField('academic_specialization_id', e.target.value)} disabled={registrationUnavailable || openSpecsForUnit.length === 0}><option value="">اختر الاختصاص</option>{openSpecsForUnit.map((spec) => <option key={spec.id} value={spec.id}>{spec.name}</option>)}</select><small className="field-help">تظهر الاختصاصات المفتوحة للتسجيل فقط.</small></label>}
+                {selectedUnit && !selectedUnitRequiresSpecialization && <div className="field field-full no-specialization-note">لا توجد اختصاصات مضافة لهذه الجهة الدراسية؛ يمكنك المتابعة دون اختيار اختصاص.</div>}
               </div>
               <div className="form-divider" />
-              <div className="form-panel-title"><span className="step-circle">3</span><div><strong>إرفاق إيصال الدفع</strong><small>ارفع فاتورة التحويل بعد الدفع عبر شام كاش</small></div></div>
-              <div className={`upload-box ${form.receipt ? 'has-file' : ''}`}>
-                <input id="receipt-file" type="file" accept="application/pdf,.pdf" onChange={(e) => setField('receipt', e.target.files?.[0] || null)} disabled={registrationUnavailable} />
-                <label htmlFor="receipt-file" className="upload-label"><span className="upload-icon">⇧</span><span className="upload-main">{form.receipt ? form.receipt.name : 'اضغط لاختيار ملف الإيصال'}</span><span className="upload-sub">PDF فقط · الحجم الأقصى 5 ميغابايت</span><span className="upload-choose">استعراض الملفات</span></label>
-                {form.receipt && <button type="button" className="remove-file" onClick={() => { setField('receipt', null); const input = document.getElementById('receipt-file'); if (input) input.value = ''; }}>إزالة الملف ×</button>}
-              </div>
-              <label className="consent-check"><input type="checkbox" required disabled={registrationUnavailable} /><span>أقرّ بأن البيانات المدخلة صحيحة، وأعلم أن التسجيل يخضع لتدقيق فريق التنظيم.</span></label>
-              <button className="primary-button submit-button" type="submit" disabled={submitting || registrationUnavailable}><span>{submitting ? 'جارٍ إرسال الطلب…' : 'إرسال طلب التسجيل'}</span><span className="button-arrow">←</span></button>
-              <p className="form-footnote"><span>♢</span> ستحصل على كود خاص لمتابعة حالة طلبك بعد الإرسال.</p>
+              <div className="form-panel-title"><span className="step-circle">3</span><div><strong>عدد المرافقين وحساب الرسوم</strong><small>يظهر المبلغ النهائي قبل إنشاء رمز التتبع</small></div></div>
+              <div className="companion-row"><div><strong>عدد المرافقين</strong><small>الحد الأقصى: {fmt(settings.max_companions)} مرافق</small></div><div className="counter"><button type="button" onClick={() => setField('companions', String(Math.max(0, companions - 1)))} disabled={registrationUnavailable || companions <= 0} aria-label="إنقاص عدد المرافقين">−</button><output>{fmt(companions)}</output><button type="button" onClick={() => setField('companions', String(Math.min(Number(settings.max_companions), companions + 1)))} disabled={registrationUnavailable || companions >= Number(settings.max_companions)} aria-label="زيادة عدد المرافقين">+</button></div></div>
+              <div className="price-summary"><div><span>رسوم الطالب</span><strong>{fmt(amountSummary.student)} <small>ل.س</small></strong></div><div><span>رسوم المرافق الواحد</span><strong>{fmt(amountSummary.companion)} <small>ل.س</small></strong></div><div className="price-total"><span>المبلغ الإجمالي المطلوب</span><strong>{fmt(amountSummary.total)} <small>ل.س</small></strong></div></div>
+              <div className="important-warning"><strong>تنبيه قبل المتابعة</strong><p>بعد تأكيد البيانات سيُنشأ رمز تتبع خاص بك. يجب نسخه وكتابته في خانة الملاحظات في شام كاش؛ الفواتير التي لا تحتوي على الرمز لن تُقبل.</p></div>
+              <label className="consent-check"><input type="checkbox" required disabled={registrationUnavailable} /><span>أؤكد صحة بياناتي وأوافق على استخدامها لتنظيم حفل التخرج ومراجعة الطلب.</span></label>
+              <button className="primary-button submit-button" type="submit" disabled={submitting || registrationUnavailable || !isConfigured || !selectedUnit}><span>{submitting ? 'جارٍ حفظ بياناتك وإنشاء رمز التتبع…' : 'تأكيد البيانات وحساب التكلفة وإنشاء رمز التتبع'}</span><span className="button-arrow">←</span></button>
+              <p className="form-footnote"><span>♢</span> لن تنتقل إلى الدفع قبل ظهور رمز التتبع وإتاحة نسخه.</p>
             </form>
           </div>
-
           <aside className="side-column">
-            <div className="section-heading side-heading"><div><span className="section-index">02 / الدفع</span><h2>خطوات الدفع</h2><p>اتبع الخطوات التالية لإتمام طلبك.</p></div></div>
-            <div className="panel payment-panel">
-              <div className="payment-step"><span className="payment-step-number">01</span><div><strong>احسب الرسوم</strong><p>يظهر المبلغ النهائي حسب رسوم الطالب وعدد المرافقين.</p></div></div>
-              <div className="payment-step"><span className="payment-step-number">02</span><div><strong>حوّل عبر شام كاش</strong><p>{settings.payment_instructions || DEFAULT_SETTINGS.payment_instructions}</p></div></div>
-              {settings.qr_image_url ? <div className="qr-container"><img src={settings.qr_image_url} alt="رمز QR للدفع عبر شام كاش" /><span>امسح الرمز من تطبيق شام كاش</span></div> : <div className="qr-placeholder"><div className="qr-mini">▦</div><span>سيظهر رمز الدفع هنا بعد إضافته من لوحة الفريق</span></div>}
-              <div className="account-box"><span>حساب شام كاش للتحويل</span><strong>{settings.shamcash_account || 'سيتم الإعلان عنه قريباً'}</strong>{settings.shamcash_account && <button type="button" onClick={() => { navigator.clipboard?.writeText(settings.shamcash_account); notify('تم نسخ حساب شام كاش.', 'success'); }}>نسخ الحساب ⧉</button>}</div>
-              <div className="secure-note"><span>▣</span><p>لن يُعتمد الطلب تلقائياً بعد الدفع؛ يجب أن يراجع الفريق الإيصال ويؤكد صحة التحويل.</p></div>
-            </div>
-            <div className="help-card"><div className="help-symbol">?</div><div><strong>هل تحتاج إلى مساعدة؟</strong><p>احتفظ بكود المتابعة بعد التسجيل. استخدمه مع رقمك الجامعي لمعرفة حالة طلبك.</p><button onClick={() => setPage('track')}>تتبع طلبي <span>←</span></button></div></div>
-            <div className="privacy-note"><span>⌑</span><p>يُستخدم رقمك الجامعي وبيانات الطلب لغرض تنظيم حفلات التخرج ومراجعة التسجيل فقط.</p></div>
+            <div className="section-heading side-heading"><div><span className="section-index">خطوات التسجيل</span><h2>رتّب خطواتك</h2><p>اتبع التسلسل حتى لا يضيع رمز التتبع أو تنقص معلومات الفاتورة.</p></div></div>
+            <div className="panel payment-panel guide-steps"><div className="payment-step"><span className="payment-step-number">01</span><div><strong>أدخل البيانات واحسب الرسوم</strong><p>تحقق من الرقم الجامعي والهاتف والكلية وعدد المرافقين.</p></div></div><div className="payment-step"><span className="payment-step-number">02</span><div><strong>انسخ رمز التتبع أولاً</strong><p>سيظهر مباشرة بعد حفظ بياناتك. لا تبدأ التحويل قبل نسخه.</p></div></div><div className="payment-step"><span className="payment-step-number">03</span><div><strong>ادفع وارفع PDF</strong><p>اكتب رمز التتبع في ملاحظات شام كاش ثم ارفع الفاتورة.</p></div></div><div className="secure-note"><span>!</span><p><strong>أي فاتورة دون رمز التتبع في خانة الملاحظات لن تُقبل.</strong></p></div></div>
           </aside>
-        </section>
-        <section className="container process-section"><div className="section-index">كيف يعمل الموقع؟</div><h2>ثلاث خطوات، وطلبك قيد المتابعة</h2><div className="process-grid"><div className="process-item"><span>01</span><div className="process-icon">♙</div><h3>سجّل بياناتك</h3><p>أدخل بياناتك الجامعية وعدد المرافقين بعناية.</p></div><div className="process-item"><span>02</span><div className="process-icon">▦</div><h3>ادفع وارفع الإيصال</h3><p>حوّل الرسوم عبر شام كاش وأرفق الإيصال بصيغة PDF.</p></div><div className="process-item"><span>03</span><div className="process-icon">✓</div><h3>تابع الموافقة</h3><p>يُدقق الفريق طلبك ويمكنك معرفة القرار من كود المتابعة.</p></div></div></section>
+        </section>}
+
+        {registrationStage !== 'details' && paymentApplication && <section className="container registration-flow">
+          <div className="flow-progress"><div className={registrationStage === 'code' ? 'current' : 'complete'}><span>1</span><small>نسخ رمز التتبع</small></div><i /><div className={registrationStage === 'payment' ? 'current' : registrationStage === 'done' ? 'complete' : ''}><span>2</span><small>الدفع ورفع الفاتورة</small></div><i /><div className={registrationStage === 'done' ? 'complete current' : ''}><span>3</span><small>تأكيد الإرسال</small></div></div>
+          {registrationStage === 'code' && <div className="panel code-stage-card"><span className="section-index">خطوة ضرورية قبل الدفع</span><h2>تم حساب الرسوم وإنشاء رمز التتبع</h2><p>انسخ الرمز الآن واحفظه. ستحتاج إلى كتابته في خانة الملاحظات داخل شام كاش، ولا تُقبل أي فاتورة لا تتضمن هذا الرمز بوضوح.</p><div className="tracking-code-card"><span>رمز التتبع الخاص بك</span><strong dir="ltr">{paymentApplication.tracking_code}</strong><button type="button" onClick={copyTrackingCode}>نسخ رمز التتبع ⧉</button></div><div className="success-total"><span>المبلغ المطلوب تحويله</span><strong>{fmt(paymentApplication.amount_syp)} ل.س</strong></div><label className="consent-check copy-confirm"><input type="checkbox" checked={codeCopied} onChange={(e) => setCodeCopied(e.target.checked)} /><span>نسخت رمز التتبع أو حفظته في مكان آمن، وسأكتبه كما هو في ملاحظات التحويل.</span></label><div className="important-warning"><strong>مهم جداً</strong><p>لا تدفع قبل حفظ الرمز. الطلب أو الفاتورة التي لا تحتوي على رمز التتبع في الملاحظات لن تُقبل.</p></div><button className="primary-button" type="button" disabled={!codeCopied} onClick={() => { setRegistrationStage('payment'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}><span>انتقلت للخطوة التالية: الدفع</span><span className="button-arrow">←</span></button></div>}
+
+          {registrationStage === 'payment' && <div className="payment-stage-grid"><div className="panel payment-instructions-card"><span className="section-index">الخطوة الثانية / الدفع</span><h2>حوّل المبلغ باستخدام شام كاش</h2><div className="tracking-code-card compact-code"><span>رمز التتبع — انسخه إلى ملاحظات التحويل</span><strong dir="ltr">{paymentApplication.tracking_code}</strong><button type="button" onClick={copyTrackingCode}>نسخ الرمز مرة أخرى ⧉</button></div><div className="amount-due-card"><span>المبلغ المطلوب كما حُسب في الخطوة السابقة</span><strong>{fmt(paymentApplication.amount_syp)} <small>ل.س</small></strong></div><ol className="payment-instruction-list"><li><strong>افتح حساب شام كاش</strong><p>افتح التطبيق واختر التحويل أو الدفع.</p></li><li><strong>امسح رمز QR أو أدخل رقم الحساب</strong><p>تأكد من أن معلومات المستفيد مطابقة للمعلومات المعروضة هنا.</p></li><li><strong>أدخل المبلغ المستحق</strong><p>حوّل المبلغ نفسه الظاهر في البطاقة السابقة دون زيادة أو نقصان.</p></li><li><strong>اكتب رمز التتبع في خانة الملاحظات</strong><p>اكتب الرمز كاملاً كما يظهر في الموقع. <b>الفواتير التي لا تحتوي على رمز التتبع لن تُقبل.</b></p></li><li><strong>نفّذ التحويل ثم صدّر الفاتورة PDF</strong><p>نزّل فاتورة التحويل من شام كاش بصيغة PDF قبل رفعها في النموذج التالي.</p></li></ol>
+            {settings.payment_instructions && <div className="additional-payment-note"><strong>ملاحظات إضافية من الإدارة</strong><p>{settings.payment_instructions}</p></div>}
+            <div className="payment-account-area">{settings.qr_image_url ? <div className="qr-container"><img src={settings.qr_image_url} alt="رمز QR للدفع عبر شام كاش" /><span>امسح هذا الرمز من داخل شام كاش</span></div> : <div className="qr-placeholder"><div className="qr-mini">▦</div><span>لم يضف المدير رمز QR بعد</span></div>}<div className="account-box"><span>رقم حساب شام كاش</span><strong>{settings.shamcash_account || 'لم يضف المدير رقم الحساب بعد'}</strong>{settings.shamcash_account && <button type="button" onClick={async () => { try { await navigator.clipboard.writeText(settings.shamcash_account); notify('تم نسخ رقم حساب شام كاش.', 'success'); } catch { notify('تعذر النسخ التلقائي؛ حدّد رقم الحساب وانسخه يدوياً.', 'info'); } }}>نسخ رقم الحساب ⧉</button>}</div></div>
+            {paymentImages.length > 0 && <div className="payment-guide-images"><h3>صور توضيحية لطريقة الدفع</h3><div>{paymentImages.map((url, index) => <figure key={url}><a href={url} target="_blank" rel="noreferrer"><img src={url} alt={`صورة توضيحية للدفع ${index + 1}`} /></a><figcaption>الخطوة التوضيحية {fmt(index + 1)}</figcaption></figure>)}</div></div>}
+            <div className="important-warning strong-warning"><strong>شرط قبول الفاتورة</strong><p>تأكد من ظهور رمز التتبع في خانة الملاحظات في شام كاش. لن تتم مراجعة أي طلب أو فاتورة لا تحتوي على رمز التتبع الخاص بالطالب.</p></div>
+          </div><div className="panel receipt-upload-card"><span className="section-index">الخطوة الأخيرة / رفع الفاتورة</span><h2>ارفع فاتورة التحويل</h2><p>بعد إتمام التحويل وتصدير الفاتورة PDF، ارفع الملف هنا. لا ترفع صورة شاشة؛ المطلوب ملف PDF الذي تم تصديره من شام كاش.</p><form onSubmit={handleReceiptUpload}><label className={`upload-box ${paymentReceipt ? 'has-file' : ''}`}><input type="file" accept="application/pdf,.pdf" onChange={(e) => setPaymentReceipt(e.target.files?.[0] || null)} /><span className="upload-label"><span className="upload-icon">⇧</span><span className="upload-main">{paymentReceipt ? paymentReceipt.name : 'اضغط لاختيار فاتورة PDF'}</span><span className="upload-sub">PDF فقط · الحد الأقصى 5 ميغابايت</span><span className="upload-choose">اختيار الملف</span></span></label><div className="invoice-code-reminder"><strong>رمز التتبع الذي سيرتبط بالفاتورة</strong><span dir="ltr">{paymentApplication.tracking_code}</span><small>قبل الرفع، تأكد أنك كتبت هذا الرمز في ملاحظات التحويل داخل شام كاش.</small></div><button className="primary-button" type="submit" disabled={receiptSubmitting || !paymentReceipt || !codeCopied}><span>{receiptSubmitting ? 'جارٍ رفع الفاتورة…' : 'رفع الفاتورة وتأكيد الطلب'}</span><span className="button-arrow">←</span></button><button type="button" className="secondary-button full-width-button" onClick={() => setRegistrationStage('code')}>العودة إلى رمز التتبع</button></form><p className="form-footnote">عند نجاح الرفع، تصبح الحالة «الفاتورة قيد التدقيق» ويستطيع فريق التنظيم مراجعتها.</p></div></div>}
+
+          {registrationStage === 'done' && <div className="panel code-stage-card completion-card"><div className="success-check">✓</div><span className="section-index">اكتمل إرسال الطلب</span><h2>تم تسجيل طلبك بنجاح</h2><p>تم استلام فاتورة التحويل، وأصبح الطلب قيد تدقيق فريق التنظيم. احتفظ برمز التتبع لمتابعة حالة طلبك.</p><div className="tracking-code-card"><span>رمز التتبع الخاص بك</span><strong dir="ltr">{paymentApplication.tracking_code}</strong><button type="button" onClick={copyTrackingCode}>نسخ الرمز ⧉</button></div><div className="success-total"><span>المبلغ المسجل</span><strong>{fmt(paymentApplication.amount_syp)} ل.س</strong></div><button className="primary-button" onClick={() => { setTrackingCode(paymentApplication.tracking_code); setTrackingResult(null); setPage('track'); }}><span>متابعة حالة الطلب</span><span className="button-arrow">←</span></button><button className="secondary-button full-width-button" onClick={() => { setPaymentApplication(null); setRegistrationStage('details'); setCodeCopied(false); setForm({ full_name: '', university_number: '', phone_number: '', carried_subjects: '0', academic_unit_id: '', academic_specialization_id: '', companions: '0' }); }}>بدء طلب جديد</button></div>}
+        </section>}
       </>}
 
-      {page === 'track' && <section className="container inner-page"><div className="inner-hero"><span className="section-index">متابعة التسجيل</span><h1>أين وصل طلبك؟</h1><p>أدخل كود المتابعة الذي حصلت عليه بعد التسجيل ورقمك الجامعي لعرض آخر حالة للطلب.</p></div><div className="track-layout"><form className="panel track-panel" onSubmit={handleTrack}><label className="field"><span>كود المتابعة <b>*</b></span><div className="input-wrap"><span className="input-icon">⌘</span><input required value={trackingCode} onChange={(e) => setTrackingCode(e.target.value.toUpperCase())} placeholder="مثال: LAT-AB12CD34EF" /></div></label><label className="field"><span>الرقم الجامعي <b>*</b></span><div className="input-wrap"><span className="input-icon">№</span><input required value={trackingUni} onChange={(e) => setTrackingUni(e.target.value)} placeholder="أدخل الرقم الجامعي" /></div></label><button className="primary-button" disabled={trackingBusy}><span>{trackingBusy ? 'جارٍ البحث…' : 'عرض حالة الطلب'}</span><span className="button-arrow">←</span></button><p className="form-footnote">للحفاظ على خصوصية بياناتك، يجب مطابقة الكود مع الرقم الجامعي.</p></form>
-          {trackingResult ? <div className="panel track-result"><div className="result-header"><span className="section-index">نتيجة الاستعلام</span><span className={`status-badge ${STATUS[trackingResult.status]?.className || 'pending'}`}>{STATUS[trackingResult.status]?.label || 'قيد التدقيق'}</span></div><h2>{trackingResult.full_name}</h2><div className="result-code"><span>كود المتابعة</span><strong>{trackingResult.tracking_code}</strong></div><div className="result-meta"><div><span>تاريخ التقديم</span><strong>{humanDate(trackingResult.created_at)}</strong></div><div><span>المبلغ المسجل</span><strong>{fmt(trackingResult.amount_syp)} ل.س</strong></div></div>{trackingResult.status === 'pending' && <p className="result-message">طلبك قيد المراجعة من قبل فريق التنظيم. يرجى متابعة الحالة لاحقاً.</p>}{trackingResult.status === 'approved' && <p className="result-message success-message">تمت الموافقة على طلبك. احتفظ بكود المتابعة لأي مراجعة لاحقة.</p>}{trackingResult.status === 'rejected' && <div className="rejection-message"><strong>سبب الرفض</strong><p>{trackingResult.rejection_reason || 'يرجى التواصل مع فريق التنظيم لمعرفة التفاصيل.'}</p></div>}</div> : <div className="track-help"><div className="big-lock">⌑</div><h3>بياناتك محمية</h3><p>لا يمكن عرض تفاصيل الطلب دون مطابقة كود المتابعة والرقم الجامعي.</p></div>}
+      {page === 'track' && <section className="container inner-page"><div className="inner-hero"><span className="section-index">متابعة التسجيل</span><h1>أين وصل طلبك؟</h1><p>أدخل رمز التتبع الخاص بك فقط. هذا الرمز فريد ويكفي لمعرفة حالة الطلب؛ لا تحتاج إلى الرقم الجامعي.</p></div><div className="track-layout"><form className="panel track-panel" onSubmit={handleTrack}><label className="field"><span>رمز التتبع <b>*</b></span><div className="input-wrap"><span className="input-icon">⌘</span><input required value={trackingCode} onChange={(e) => setTrackingCode(e.target.value.toUpperCase())} placeholder="LAT- ثم الرمز الطويل" autoCapitalize="characters" /></div></label><button className="primary-button" disabled={trackingBusy}><span>{trackingBusy ? 'جارٍ البحث…' : 'عرض حالة الطلب'}</span><span className="button-arrow">←</span></button><p className="form-footnote">احتفظ برمز التتبع ولا تشاركه إلا مع فريق التنظيم. لا يمكن تتبع الطلب برقم جامعي وحده.</p></form>
+          {trackingResult ? <div className="panel track-result"><div className="result-header"><span className="section-index">نتيجة الاستعلام</span><span className={`status-badge ${STATUS[trackingResult.status]?.className || 'pending'}`}>{STATUS[trackingResult.status]?.label || trackingResult.status}</span></div><h2>{trackingResult.full_name}</h2><div className="result-code"><span>رمز التتبع</span><strong dir="ltr">{trackingResult.tracking_code}</strong></div><div className="result-meta"><div><span>تاريخ التقديم</span><strong>{humanDate(trackingResult.created_at)}</strong></div><div><span>المبلغ المسجل</span><strong>{fmt(trackingResult.amount_syp)} ل.س</strong></div><div><span>الكلية أو المعهد</span><strong>{trackingResult.department}</strong></div><div><span>الاختصاص</span><strong>{trackingResult.specialization}</strong></div></div>{trackingResult.status === 'awaiting_payment' && <><div className="important-warning"><strong>الطلب بانتظار الفاتورة</strong><p>أتمم التحويل مع كتابة رمز التتبع في الملاحظات، ثم ارفع فاتورة PDF هنا.</p></div><form className="track-receipt-form" onSubmit={handleTrackReceiptUpload}><label className="field"><span>فاتورة التحويل PDF <b>*</b></span><input type="file" accept="application/pdf,.pdf" onChange={(e) => setTrackReceipt(e.target.files?.[0] || null)} required /></label><button className="primary-button" disabled={trackReceiptBusy || !trackReceipt}><span>{trackReceiptBusy ? 'جارٍ الرفع…' : 'رفع الفاتورة'}</span></button></form></>}{trackingResult.status === 'pending' && <p className="result-message">تم استلام الفاتورة؛ طلبك قيد المراجعة من قبل فريق التنظيم.</p>}{trackingResult.status === 'approved' && <><ApprovalCelebration name={trackingResult.full_name} /><TicketGallery tickets={trackingResult.tickets || []} application={trackingResult} /></>}{trackingResult.status === 'rejected' && <div className="rejection-message"><strong>سبب الرفض</strong><p>{trackingResult.rejection_reason || 'يرجى التواصل مع فريق التنظيم لمعرفة التفاصيل.'}</p></div>}</div> : <div className="track-help"><div className="big-lock">⌑</div><h3>بياناتك محمية</h3><p>لا يظهر طلبك إلا لمن يمتلك رمز التتبع الفريد.</p></div>}
         </div></section>}
 
-      {page === 'staff' && <section className="container inner-page staff-page"><div className="inner-hero"><span className="section-index">للاستخدام الداخلي</span><h1>بوابة فريق التنظيم</h1><p>تسجيل الدخول مخصص للأشخاص الذين أضافهم مدير النظام إلى فريق مراجعة الطلبات.</p></div><div className="staff-login-layout"><div className="panel staff-login-card"><div className="staff-login-mark">⌑</div><h2>تسجيل دخول الفريق</h2><p>استخدم بيانات الحساب المصرّح به من مدير النظام.</p><form onSubmit={handleLogin}><label className="field"><span>البريد الإلكتروني</span><div className="input-wrap"><span className="input-icon">✉</span><input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" placeholder="name@example.com" /></div></label><label className="field"><span>كلمة المرور</span><div className="input-wrap"><span className="input-icon">⌑</span><input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" placeholder="أدخل كلمة المرور" /></div></label><button className="primary-button" disabled={authChecking || !isConfigured}><span>{authChecking ? 'جارٍ التحقق…' : 'تسجيل الدخول'}</span><span className="button-arrow">←</span></button>{!isConfigured && <small className="muted-line">إعداد قاعدة البيانات مطلوب قبل تسجيل الدخول.</small>}</form></div><div className="staff-login-info"><span className="section-index">صلاحيات المراجعة</span><h2>كل الطلبات في مكان واحد.</h2><p>بعد تسجيل الدخول، يمكن للفريق الاطلاع على الطلبات وإيصالات الدفع، ثم الموافقة أو الرفض مع تدوين السبب، وتعديل رسوم التسجيل ومعلومات الدفع.</p><div className="staff-feature"><span>✓</span><div><strong>مراجعة الإيصالات</strong><small>فتح ملف PDF من مساحة تخزين خاصة</small></div></div><div className="staff-feature"><span>✓</span><div><strong>توثيق القرار</strong><small>تسجيل الموافقة أو سبب الرفض وتاريخ المراجعة</small></div></div><div className="staff-feature"><span>✓</span><div><strong>إعدادات التسجيل</strong><small>الرسوم، عدد المرافقين، وحساب الدفع</small></div></div></div></div></section>}
+      {page === 'verify' && <section className="container inner-page ticket-verification-page"><div className="inner-hero"><span className="section-index">التحقق من بطاقة الدخول</span><h1>بوابة التحقق لحفل التخرج</h1><p>تحقق من صلاحية البطاقة ونوعها قبل السماح بالدخول.</p></div>{ticketVerifyBusy && <div className="panel verification-state"><div className="verification-spinner" /><h2>جارٍ التحقق من رمز QR…</h2></div>}{!ticketVerifyBusy && ticketVerifyError && <div className="panel verification-state invalid-ticket"><div className="verification-symbol">×</div><h2>تعذّر التحقق من البطاقة</h2><p>{ticketVerifyError}</p></div>}{!ticketVerifyBusy && ticketVerification?.valid && <VerifiedTicket verification={ticketVerification} />}</section>}
 
-      {page === 'admin' && staffUser && <AdminDashboard staffUser={staffUser} settings={settings} setSettings={setSettings} refreshSettings={loadSettings} notify={notify} onSignOut={signOut} />}
+      {page === 'staff' && <section className="container inner-page staff-page"><div className="inner-hero"><span className="section-index">للاستخدام الداخلي</span><h1>بوابة فريق التنظيم</h1><p>تسجيل الدخول مخصص للأشخاص الذين أضافهم مدير النظام إلى فريق مراجعة الطلبات.</p></div><div className="staff-login-layout"><div className="panel staff-login-card"><div className="staff-login-mark">⌑</div><h2>تسجيل دخول الفريق</h2><p>استخدم بيانات الحساب المصرّح به من مدير النظام.</p><form onSubmit={handleLogin}><label className="field"><span>البريد الإلكتروني</span><div className="input-wrap"><span className="input-icon">✉</span><input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" placeholder="name@example.com" /></div></label><label className="field"><span>كلمة المرور</span><div className="input-wrap"><span className="input-icon">⌑</span><input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" placeholder="أدخل كلمة المرور" /></div></label><button className="primary-button" disabled={authChecking || !isConfigured}><span>{authChecking ? 'جارٍ التحقق…' : 'تسجيل الدخول'}</span><span className="button-arrow">←</span></button>{!isConfigured && <small className="muted-line">إعداد قاعدة البيانات مطلوب قبل تسجيل الدخول.</small>}</form></div><div className="staff-login-info"><span className="section-index">صلاحيات المراجعة</span><h2>كل الطلبات في مكان واحد.</h2><p>بعد تسجيل الدخول، يمكن للفريق الاطلاع على الطلبات وإيصالات الدفع، ثم الموافقة أو الرفض مع تدوين السبب. يستطيع المدير وحده تعديل الرسوم وقوائم الكليات والاختصاصات.</p><div className="staff-feature"><span>✓</span><div><strong>مراجعة الإيصالات</strong><small>فتح ملف PDF من مساحة تخزين خاصة</small></div></div><div className="staff-feature"><span>✓</span><div><strong>توثيق القرار</strong><small>تسجيل الموافقة أو سبب الرفض وتاريخ المراجعة</small></div></div><div className="staff-feature"><span>✓</span><div><strong>إدارة قوائم التسجيل</strong><small>الكليات والمعاهد والاختصاصات وحدود المواد المحمولة</small></div></div></div></div></section>}
+
+      {page === 'admin' && staffUser && <AdminDashboard staffUser={staffUser} staffRole={staffRole} settings={settings} setSettings={setSettings} refreshSettings={loadSettings} catalog={catalog} catalogError={catalogError} refreshCatalog={loadCatalog} notify={notify} onSignOut={signOut} />}
     </main>
 
-    <footer className="site-footer"><div className="container footer-inner"><div className="footer-brand"><img className="brand-logo small-brand-logo" src="/brand/ssu-emblem.png" alt="" /><div><strong>{settings.organizer || DEFAULT_SETTINGS.organizer}</strong><span>{settings.university_label || DEFAULT_SETTINGS.university_label}</span></div></div><p>منصة التسجيل لحفلات التخرج · نحو مستقبل يصنعه الشباب · {new Date().getFullYear()}</p><span className="footer-status"><i className="dot" /> نظام التسجيل والمتابعة</span></div></footer>
+    <footer className="site-footer"><div className="container footer-inner"><div className="footer-brand"><img className="brand-logo small-brand-logo" src="/brand/ssu-emblem.png" alt="" /><div><strong>{settings.organizer || DEFAULT_SETTINGS.organizer}</strong><span>{settings.university_label || DEFAULT_SETTINGS.university_label}</span></div></div><p>منصة التسجيل لحفلات التخرج · دفعة 2026 · {new Date().getFullYear()}</p><span className="footer-status"><i className="dot" /> نظام التسجيل والمتابعة</span></div></footer>
 
     {toast && <div className={`toast toast-${toast.kind}`} role="status"><span>{toast.kind === 'error' ? '!' : toast.kind === 'success' ? '✓' : 'i'}</span>{toast.message}<button onClick={() => setToast(null)} aria-label="إغلاق">×</button></div>}
-    {success && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="تم إرسال طلب التسجيل"><div className="success-modal panel"><button className="modal-close" onClick={() => setSuccess(null)} aria-label="إغلاق">×</button><div className="success-check">✓</div><span className="section-index">تم استلام طلبك</span><h2>تم إرسال التسجيل بنجاح</h2><p>احتفظ بكود المتابعة التالي. ستحتاج إليه مع رقمك الجامعي لمعرفة قرار فريق التنظيم.</p><div className="tracking-code-card"><span>كود المتابعة الخاص بك</span><strong>{success.tracking_code}</strong><button onClick={() => { navigator.clipboard?.writeText(success.tracking_code); notify('تم نسخ كود المتابعة.', 'success'); }}>نسخ الكود ⧉</button></div><div className="success-total"><span>المبلغ المسجل في الطلب</span><strong>{fmt(success.amount_syp)} ل.س</strong></div><button className="primary-button" onClick={() => { setTrackingCode(success.tracking_code); setTrackingUni(success.university_number || ''); setSuccess(null); setPage('track'); }}><span>الانتقال إلى تتبع الطلب</span><span className="button-arrow">←</span></button><small>لا تغلق هذه النافذة قبل حفظ الكود أو نسخه.</small></div></div>}
   </div>;
 }
 
-function AdminDashboard({ staffUser, settings, setSettings, refreshSettings, notify, onSignOut }) {
+function ApprovalCelebration({ name }) {
+  const pieces = Array.from({ length: 24 }, (_, index) => index);
+  return <section className="approval-celebration" aria-live="polite">
+    <div className="celebration-confetti" aria-hidden="true">{pieces.map((piece) => <span key={piece} style={{ left: `${(piece * 37) % 100}%`, animationDelay: `${(piece % 8) * 0.16}s`, animationDuration: `${2.6 + (piece % 5) * 0.35}s`, '--piece-rotate': `${piece * 43}deg` }} />)}</div>
+    <div className="celebration-badge" aria-hidden="true">🎓</div>
+    <span className="section-index">خبر سعيد</span>
+    <h3>🎉 مبارك يا {name || 'خريجنا العزيز'}!</h3>
+    <p>تمت الموافقة على طلبك. نتمنى لك حفل تخرج مليئاً بالفرح والذكريات الجميلة.</p>
+    <div className="celebration-sparkles" aria-hidden="true">✦ ✧ ✨ ✧ ✦</div>
+  </section>;
+}
+
+function TicketGallery({ tickets, application }) {
+  if (!tickets.length) return <div className="ticket-loading-note"><strong>تم قبول الطلب</strong><p>يجري تجهيز بطاقات الدخول. حدّث حالة الطلب بعد لحظات إن لم تظهر البطاقات.</p></div>;
+  return <section className="ticket-gallery" id="entry-tickets">
+    <div className="ticket-gallery-heading"><div><span className="section-index">بطاقات الدخول</span><h3>بطاقاتك جاهزة للحفظ أو الطباعة</h3><p>توجد بطاقة مستقلة للخريج ولكل مرافق. كل رمز QR يُتحقق منه بشكل منفصل.</p></div><button type="button" className="secondary-button ticket-print-button" onClick={() => window.print()}>طباعة البطاقات</button></div>
+    <div className="ticket-cards-grid">{tickets.map((ticket) => <EntryTicketCard key={ticket.ticket_token} ticket={ticket} application={application} />)}</div>
+    <p className="ticket-privacy-note">لا تنشر صور البطاقات أو رموز QR على مواقع التواصل؛ كل رمز مخصص لدخول شخص واحد.</p>
+  </section>;
+}
+
+function EntryTicketCard({ ticket, application }) {
+  const [qrData, setQrData] = useState('');
+  const verifyUrl = `${window.location.origin}/?ticket=${encodeURIComponent(ticket.ticket_token)}`;
+  useEffect(() => {
+    let alive = true;
+    QRCode.toDataURL(verifyUrl, { width: 240, margin: 1, errorCorrectionLevel: 'M', color: { dark: '#173f35', light: '#ffffff' } })
+      .then((data) => { if (alive) setQrData(data); })
+      .catch((error) => console.error('QR generation failed', error));
+    return () => { alive = false; };
+  }, [verifyUrl]);
+  const isGraduate = ticket.ticket_type === 'graduate' || ticket.ticket_number === 0;
+  return <article className={`entry-ticket-card ${isGraduate ? 'graduate-ticket' : 'companion-ticket'}`}>
+    <div className="entry-ticket-topline"><img src="/brand/ssu-emblem.png" alt="" /><div><strong>اتحاد طلبة سوريا</strong><span>فرع محافظة اللاذقية · دفعة 2026</span></div></div>
+    <div className="ticket-card-title"><span>{isGraduate ? 'بطاقة دخول الخريج' : `بطاقة دخول المرافق ${ticket.ticket_number}`}</span><strong>{isGraduate ? '🎓' : '🎟️'}</strong></div>
+    <h4>{application.full_name}</h4>
+    <p className="ticket-program">{application.department || '—'}{application.specialization && application.specialization !== 'لا يوجد اختصاص' ? ` · ${application.specialization}` : ''}</p>
+    <div className="ticket-data-grid">
+      {isGraduate && <><div><span>الرقم الجامعي</span><strong>{application.university_number || '—'}</strong></div><div><span>المواد المحمولة</span><strong>{fmt(application.carried_subjects)}</strong></div><div><span>عدد المرافقين</span><strong>{fmt(application.companions)}</strong></div><div><span>قيمة الرسوم</span><strong>{fmt(application.amount_syp)} ل.س</strong></div></>}
+      {!isGraduate && <><div><span>يرافق الخريج</span><strong>{application.full_name}</strong></div><div><span>رقم المرافق</span><strong>{fmt(ticket.ticket_number)}</strong></div><div><span>نوع الدخول</span><strong>مرافق</strong></div><div><span>صلاحية البطاقة</span><strong>بعد اعتماد الطلب</strong></div></>}
+    </div>
+    <div className="ticket-qr-area">{qrData ? <img src={qrData} alt={`رمز تحقق ${isGraduate ? 'بطاقة الخريج' : `المرافق ${ticket.ticket_number}`}`} /> : <div className="ticket-qr-placeholder">جارٍ إنشاء رمز QR…</div>}<div><strong>رمز تحقق الدخول</strong><small>امسح الرمز عند بوابة الحفل</small></div></div>
+    <div className="ticket-card-footer"><span>صالح بعد الموافقة النهائية</span><span dir="ltr">{isGraduate ? 'GRADUATE' : `GUEST-${String(ticket.ticket_number).padStart(2, '0')}`}</span></div>
+  </article>;
+}
+
+function VerifiedTicket({ verification }) {
+  const { ticket, graduate } = verification;
+  const isGraduate = ticket.type === 'graduate' || ticket.number === 0;
+  return <div className="panel verified-ticket-panel">
+    <div className="verified-ticket-status"><span className="verified-status-icon">✓</span><div><strong>البطاقة صالحة للدخول</strong><small>تم التحقق من رمز QR وموافقة الطلب</small></div><span className="status-badge approved">مقبول</span></div>
+    <div className="verified-ticket-kind"><span>{isGraduate ? '🎓' : '🎟️'}</span><div><small>نوع البطاقة</small><h2>{isGraduate ? 'بطاقة الخريج' : `بطاقة المرافق رقم ${ticket.number}`}</h2></div></div>
+    <div className="verified-person-name"><span>اسم الخريج</span><strong>{graduate.full_name}</strong></div>
+    <div className="verified-data-grid">
+      <div><span>الرقم الجامعي</span><strong>{graduate.university_number || '—'}</strong></div>
+      <div><span>الكلية أو المعهد</span><strong>{graduate.department || '—'}</strong></div>
+      <div><span>الاختصاص</span><strong>{graduate.specialization || 'لا يوجد اختصاص'}</strong></div>
+      {!isGraduate && <div><span>رقم بطاقة المرافق</span><strong>{fmt(ticket.number)}</strong></div>}
+    </div>
+    <div className="important-warning verified-ticket-warning"><strong>تعليمات البوابة</strong><p>{isGraduate ? 'طابق اسم الخريج ورقمه الجامعي مع وثيقة الطالب عند الحاجة.' : `هذه البطاقة خاصة بمرافق واحد للخريج ${graduate.full_name}. لا تستخدمها لدخول مرافق آخر.`}</p></div>
+    <p className="verification-note">{verification.message}</p>
+  </div>;
+}
+
+function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSettings, catalog, catalogError, refreshCatalog, notify, onSignOut }) {
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('all');
@@ -261,27 +483,41 @@ function AdminDashboard({ staffUser, settings, setSettings, refreshSettings, not
   const [localSettings, setLocalSettings] = useState(settings);
   const [tab, setTab] = useState('applications');
   const [receiptLink, setReceiptLink] = useState('');
+  const [newUnitName, setNewUnitName] = useState('');
+  const [newUnitType, setNewUnitType] = useState('faculty');
+  const [newSpecializationName, setNewSpecializationName] = useState('');
+  const [specializationTargetUnit, setSpecializationTargetUnit] = useState('');
+  const isAdmin = staffRole === 'admin';
 
-  useEffect(() => setLocalSettings(settings), [settings]);
+  useEffect(() => setLocalSettings({ ...DEFAULT_SETTINGS, ...settings, payment_images: Array.isArray(settings.payment_images) ? settings.payment_images : [] }), [settings]);
+  useEffect(() => { if (!isAdmin && (tab === 'settings' || tab === 'academic')) setTab('applications'); }, [isAdmin, tab]);
+
   const loadApplications = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase.from('applications').select('*').order('created_at', { ascending: false }).limit(500);
     if (error) notify('تعذر تحميل الطلبات: ' + error.message, 'error');
     setApplications(data || []); setLoading(false);
-  }, [statusFilter, notify]);
+  }, [notify]);
   useEffect(() => { loadApplications(); }, [loadApplications]);
   useEffect(() => { if (selected) setSelected(applications.find((item) => item.id === selected.id) || selected); }, [applications]);
 
   const filtered = applications.filter((item) => {
     const term = search.trim().toLowerCase();
     const matchesStatus = statusFilter === 'all' || item.status === statusFilter;
-    const matchesSearch = !term || [item.full_name, item.university_number, item.tracking_code, item.department, item.specialization].some((v) => String(v || '').toLowerCase().includes(term));
+    const matchesSearch = !term || [item.full_name, item.university_number, item.phone_number, item.tracking_code, item.department, item.specialization].some((v) => String(v || '').toLowerCase().includes(term));
     return matchesStatus && matchesSearch;
   });
-  const counts = { all: applications.length, pending: applications.filter((a) => a.status === 'pending').length, approved: applications.filter((a) => a.status === 'approved').length, rejected: applications.filter((a) => a.status === 'rejected').length };
+  const counts = {
+    all: applications.length,
+    awaiting_payment: applications.filter((a) => a.status === 'awaiting_payment').length,
+    pending: applications.filter((a) => a.status === 'pending').length,
+    approved: applications.filter((a) => a.status === 'approved').length,
+    rejected: applications.filter((a) => a.status === 'rejected').length,
+  };
 
   async function decide(status) {
     if (!selected) return;
+    if (!selected.receipt_path) return notify('لا يمكن مراجعة الطلب قبل رفع فاتورة PDF.', 'error');
     if (status === 'rejected' && rejectReason.trim().length < 3) return notify('اكتب سبب الرفض ليظهر للطالب عند تتبع الطلب.', 'error');
     setSavingDecision(true);
     const { error } = await supabase.from('applications').update({ status, rejection_reason: status === 'rejected' ? rejectReason.trim() : null, reviewed_by: staffUser.id, reviewed_at: new Date().toISOString() }).eq('id', selected.id);
@@ -291,59 +527,144 @@ function AdminDashboard({ staffUser, settings, setSettings, refreshSettings, not
   }
 
   async function openReceipt() {
-    if (!selected?.receipt_path) return;
+    if (!selected?.receipt_path) return notify('لم يرفع الطالب الفاتورة بعد.', 'info');
     const { data, error } = await supabase.storage.from('receipts').createSignedUrl(selected.receipt_path, 300);
-    if (error) return notify('تعذر فتح الإيصال: ' + error.message, 'error');
+    if (error) return notify('تعذر فتح الفاتورة: ' + error.message, 'error');
     setReceiptLink(data.signedUrl);
     window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
   }
 
   async function saveSettings(event) {
-    event.preventDefault(); setSavingSettings(true);
+    event.preventDefault();
+    if (!isAdmin) return notify('تعديل الإعدادات متاح للمدير فقط.', 'error');
+    setSavingSettings(true);
     const dataToSave = {
-      event_title: localSettings.event_title.trim(), university_label: localSettings.university_label.trim(), organizer: localSettings.organizer.trim(),
-      registration_open: Boolean(localSettings.registration_open), student_fee: Number(localSettings.student_fee), companion_fee: Number(localSettings.companion_fee),
-      max_companions: Number(localSettings.max_companions), shamcash_account: localSettings.shamcash_account.trim(), payment_instructions: localSettings.payment_instructions.trim(), qr_image_url: localSettings.qr_image_url || null,
+      event_title: localSettings.event_title.trim(),
+      university_label: localSettings.university_label.trim(),
+      organizer: localSettings.organizer.trim(),
+      registration_open: Boolean(localSettings.registration_open),
+      student_fee: Number(localSettings.student_fee),
+      companion_fee: Number(localSettings.companion_fee),
+      max_companions: Number(localSettings.max_companions),
+      max_carried_subjects: Number(localSettings.max_carried_subjects),
+      shamcash_account: localSettings.shamcash_account.trim(),
+      payment_instructions: localSettings.payment_instructions.trim(),
+      qr_image_url: localSettings.qr_image_url || null,
+      payment_images: Array.isArray(localSettings.payment_images) ? localSettings.payment_images : [],
       updated_at: new Date().toISOString(),
     };
     const { error } = await supabase.from('event_settings').update(dataToSave).eq('id', 1);
     if (error) notify('تعذر حفظ الإعدادات: ' + error.message, 'error');
-    else { notify('تم حفظ إعدادات التسجيل.', 'success'); await refreshSettings(); }
+    else { notify('تم حفظ إعدادات التسجيل والدفع.', 'success'); await refreshSettings(); }
     setSavingSettings(false);
   }
 
   async function uploadQr(file) {
     if (!file) return;
+    if (!isAdmin) return notify('رفع صور الدفع متاح للمدير فقط.', 'error');
     if (!file.type.startsWith('image/')) return notify('اختر ملف صورة لرمز QR.', 'error');
     if (file.size > 3 * 1024 * 1024) return notify('حجم صورة QR يجب ألا يتجاوز 3 ميغابايت.', 'error');
     const ext = file.name.split('.').pop()?.toLowerCase() || 'png';
-    const path = `qr-code-${Date.now()}.${ext}`;
-    const { error } = await supabase.storage.from('event-assets').upload(path, file, { upsert: true, contentType: file.type });
+    const path = `qr-code-${crypto.randomUUID()}.${ext}`;
+    const { error } = await supabase.storage.from('event-assets').upload(path, file, { upsert: false, contentType: file.type });
     if (error) return notify('تعذر رفع صورة QR: ' + error.message, 'error');
     const { data } = supabase.storage.from('event-assets').getPublicUrl(path);
     setLocalSettings((old) => ({ ...old, qr_image_url: data.publicUrl }));
-    notify('تم رفع الصورة. اضغط حفظ الإعدادات لنشرها.', 'success');
+    notify('تم رفع صورة QR. اضغط حفظ الإعدادات لنشرها.', 'success');
+  }
+
+  async function uploadPaymentImages(files) {
+    if (!files?.length) return;
+    if (!isAdmin) return notify('رفع الصور التوضيحية متاح للمدير فقط.', 'error');
+    const existing = Array.isArray(localSettings.payment_images) ? localSettings.payment_images : [];
+    if (existing.length + files.length > 8) return notify('الحد الأقصى للصور التوضيحية هو 8 صور.', 'error');
+    const urls = [];
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) return notify(`الملف ${file.name} ليس صورة.`, 'error');
+      if (file.size > 3 * 1024 * 1024) return notify(`حجم الصورة ${file.name} يتجاوز 3 ميغابايت.`, 'error');
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const path = `payment-guides/${crypto.randomUUID()}.${ext}`;
+      const { error } = await supabase.storage.from('event-assets').upload(path, file, { upsert: false, contentType: file.type });
+      if (error) return notify(`تعذر رفع الصورة ${file.name}: ${error.message}`, 'error');
+      const { data } = supabase.storage.from('event-assets').getPublicUrl(path);
+      urls.push(data.publicUrl);
+    }
+    setLocalSettings((old) => ({ ...old, payment_images: [...(Array.isArray(old.payment_images) ? old.payment_images : []), ...urls] }));
+    notify('تم رفع الصور التوضيحية. اضغط حفظ الإعدادات لإظهارها للطلاب.', 'success');
+  }
+
+  async function addUnit(event) {
+    event.preventDefault();
+    if (!newUnitName.trim()) return;
+    const { error } = await supabase.from('academic_units').insert({ name: newUnitName.trim(), unit_type: newUnitType, is_open: true });
+    if (error) return notify(error.code === '23505' ? 'هذه الكلية أو المعهد مضاف مسبقاً.' : 'تعذر إضافة الجهة الدراسية: ' + error.message, 'error');
+    setNewUnitName(''); notify('تمت إضافة الجهة الدراسية.', 'success'); await refreshCatalog();
+  }
+
+  async function toggleUnit(unit, isOpen) {
+    const { error } = await supabase.from('academic_units').update({ is_open: isOpen }).eq('id', unit.id);
+    if (error) return notify('تعذر تغيير حالة التسجيل: ' + error.message, 'error');
+    notify(isOpen ? 'تم فتح التسجيل لهذه الجهة.' : 'تم إيقاف التسجيل لهذه الجهة.', 'success'); await refreshCatalog();
+  }
+
+  async function deleteUnit(unit) {
+    if (!window.confirm(`هل أنت متأكد من حذف ${unit.name}؟ سيتم حذف الاختصاصات المرتبطة بها من قائمة الاختيار، ولن تُحذف الطلبات السابقة.`)) return;
+    const { error } = await supabase.from('academic_units').delete().eq('id', unit.id);
+    if (error) return notify('تعذر حذف الجهة: ' + error.message, 'error');
+    notify('تم حذف الجهة من قائمة التسجيل.', 'success'); await refreshCatalog();
+  }
+
+  async function addSpecialization(event) {
+    event.preventDefault();
+    if (!specializationTargetUnit || !newSpecializationName.trim()) return notify('اختر كلية أو معهداً واكتب اسم الاختصاص.', 'error');
+    const { error } = await supabase.from('academic_specializations').insert({ unit_id: specializationTargetUnit, name: newSpecializationName.trim(), is_open: true });
+    if (error) return notify(error.code === '23505' ? 'هذا الاختصاص مضاف لهذه الجهة مسبقاً.' : 'تعذر إضافة الاختصاص: ' + error.message, 'error');
+    setNewSpecializationName(''); notify('تمت إضافة الاختصاص.', 'success'); await refreshCatalog();
+  }
+
+  async function toggleSpecialization(spec, isOpen) {
+    const { error } = await supabase.from('academic_specializations').update({ is_open: isOpen }).eq('id', spec.id);
+    if (error) return notify('تعذر تغيير حالة الاختصاص: ' + error.message, 'error');
+    notify(isOpen ? 'تم فتح التسجيل للاختصاص.' : 'تم إيقاف التسجيل للاختصاص.', 'success'); await refreshCatalog();
+  }
+
+  async function deleteSpecialization(spec) {
+    if (!window.confirm(`هل تريد حذف الاختصاص «${spec.name}» من قائمة التسجيل؟ لن تتأثر الطلبات السابقة.`)) return;
+    const { error } = await supabase.from('academic_specializations').delete().eq('id', spec.id);
+    if (error) return notify('تعذر حذف الاختصاص: ' + error.message, 'error');
+    notify('تم حذف الاختصاص من القائمة.', 'success'); await refreshCatalog();
   }
 
   function exportCsv() {
-    const cols = ['tracking_code', 'full_name', 'university_number', 'department', 'specialization', 'companions', 'amount_syp', 'status', 'rejection_reason', 'created_at'];
+    const cols = ['tracking_code', 'full_name', 'university_number', 'phone_number', 'carried_subjects', 'department', 'specialization', 'companions', 'amount_syp', 'status', 'rejection_reason', 'created_at'];
     const escape = (v) => `"${String(v ?? '').replaceAll('"', '""')}"`;
     const csv = '\uFEFF' + [cols.join(','), ...filtered.map((row) => cols.map((col) => escape(row[col])).join(','))].join('\r\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'graduation-applications.csv'; anchor.click(); URL.revokeObjectURL(url);
   }
 
+  const units = catalog.units || [];
+  const specs = catalog.specializations || [];
   return <section className="container admin-page">
-    <div className="admin-welcome"><div><span className="section-index">لوحة إدارة التسجيل</span><h1>مرحباً بفريق التنظيم</h1><p>راجع الطلبات، تحقق من إيصالات الدفع، ووثّق قرارات الموافقة أو الرفض.</p></div><button className="secondary-button" onClick={onSignOut}>تسجيل الخروج ↗</button></div>
-    <div className="admin-tabs"><button className={tab === 'applications' ? 'active' : ''} onClick={() => setTab('applications')}>الطلبات <span>{counts.pending}</span></button><button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>إعدادات التسجيل</button></div>
-    {tab === 'applications' ? <>
-      <div className="stats-grid"><div className="stat-card"><span>إجمالي الطلبات المعروضة</span><strong>{fmt(counts.all)}</strong><small>حتى آخر 500 طلب</small></div><div className="stat-card stat-pending"><span>قيد التدقيق</span><strong>{fmt(counts.pending)}</strong><small>تحتاج إلى مراجعة</small></div><div className="stat-card stat-approved"><span>تمت الموافقة</span><strong>{fmt(counts.approved)}</strong><small>طلبات معتمدة</small></div><div className="stat-card stat-rejected"><span>مرفوضة</span><strong>{fmt(counts.rejected)}</strong><small>مع تسجيل السبب</small></div></div>
-      <div className="admin-workspace"><div className="panel applications-panel"><div className="applications-toolbar"><div><h2>طلبات التسجيل</h2><span>{filtered.length} نتيجة</span></div><button className="secondary-button export-button" onClick={exportCsv}>تصدير CSV ⇩</button></div><div className="filter-row"><div className="input-wrap search-wrap"><span className="input-icon">⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ابحث بالاسم أو الرقم الجامعي أو الكود" /></div><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="تصفية حسب الحالة"><option value="all">كل الحالات</option><option value="pending">قيد التدقيق</option><option value="approved">تمت الموافقة</option><option value="rejected">مرفوض</option></select><button className="refresh-button" onClick={loadApplications} title="تحديث">↻</button></div>
-        {loading ? <div className="empty-state">جارٍ تحميل الطلبات…</div> : filtered.length === 0 ? <div className="empty-state"><span>⌕</span><strong>لا توجد طلبات مطابقة</strong><p>ستظهر الطلبات هنا بعد إرسالها من نموذج التسجيل.</p></div> : <div className="table-scroll"><table className="applications-table"><thead><tr><th>الطالب / الكود</th><th>القسم والاختصاص</th><th>المبلغ</th><th>الحالة</th><th>التاريخ</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : ''} onClick={() => { setSelected(item); setRejectReason(item.rejection_reason || ''); setReceiptLink(''); }}><td><strong>{item.full_name}</strong><small>{item.tracking_code} · {item.university_number}</small></td><td><span>{item.department}</span><small>{item.specialization}</small></td><td><strong>{fmt(item.amount_syp)} ل.س</strong><small>{fmt(item.companions)} مرافق</small></td><td><span className={`status-badge ${STATUS[item.status]?.className || 'pending'}`}>{STATUS[item.status]?.label || item.status}</span></td><td>{humanDate(item.created_at)}</td></tr>)}</tbody></table></div>}
+    <div className="admin-welcome"><div><span className="section-index">لوحة إدارة التسجيل</span><h1>مرحباً بفريق التنظيم</h1><p>راجع الطلبات، تحقق من الفواتير، واضبط خيارات التسجيل بحسب الكليات والمعاهد.</p></div><button className="secondary-button" onClick={onSignOut}>تسجيل الخروج ↗</button></div>
+    <div className="admin-tabs"><button className={tab === 'applications' ? 'active' : ''} onClick={() => setTab('applications')}>الطلبات <span>{counts.pending}</span></button>{isAdmin && <><button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>الرسوم والدفع</button><button className={tab === 'academic' ? 'active' : ''} onClick={() => setTab('academic')}>الكليات والاختصاصات</button></>}</div>
+    {tab === 'applications' && <>
+      <div className="stats-grid admin-stats-five"><div className="stat-card"><span>إجمالي الطلبات</span><strong>{fmt(counts.all)}</strong><small>حتى آخر 500 طلب</small></div><div className="stat-card stat-pending"><span>بانتظار الفاتورة</span><strong>{fmt(counts.awaiting_payment)}</strong><small>أنشئت ولم ترفع الفاتورة</small></div><div className="stat-card stat-pending"><span>قيد التدقيق</span><strong>{fmt(counts.pending)}</strong><small>فاتورة مرفوعة</small></div><div className="stat-card stat-approved"><span>تمت الموافقة</span><strong>{fmt(counts.approved)}</strong><small>طلبات معتمدة</small></div><div className="stat-card stat-rejected"><span>مرفوضة</span><strong>{fmt(counts.rejected)}</strong><small>مع تسجيل السبب</small></div></div>
+      <div className="admin-workspace"><div className="panel applications-panel"><div className="applications-toolbar"><div><h2>طلبات التسجيل</h2><span>{filtered.length} نتيجة</span></div><button className="secondary-button export-button" onClick={exportCsv}>تصدير CSV ⇩</button></div><div className="filter-row"><div className="input-wrap search-wrap"><span className="input-icon">⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ابحث بالاسم أو الرقم أو الكود" /></div><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="تصفية حسب الحالة"><option value="all">كل الحالات</option><option value="awaiting_payment">بانتظار الفاتورة</option><option value="pending">قيد التدقيق</option><option value="approved">تمت الموافقة</option><option value="rejected">مرفوض</option></select><button className="refresh-button" onClick={loadApplications} title="تحديث">↻</button></div>
+        {loading ? <div className="empty-state">جارٍ تحميل الطلبات…</div> : filtered.length === 0 ? <div className="empty-state"><span>⌕</span><strong>لا توجد طلبات مطابقة</strong><p>ستظهر الطلبات هنا بعد إنشاء طلبات الطلاب.</p></div> : <div className="table-scroll"><table className="applications-table"><thead><tr><th>الطالب / الرمز</th><th>الكلية / الاختصاص</th><th>المبلغ</th><th>الحالة</th><th>التاريخ</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : ''} onClick={() => { setSelected(item); setRejectReason(item.rejection_reason || ''); setReceiptLink(''); }}><td><strong>{item.full_name}</strong><small>{item.tracking_code} · {item.university_number}</small><small>{item.phone_number || '—'}</small></td><td><span>{item.department}</span><small>{item.specialization}</small></td><td><strong>{fmt(item.amount_syp)} ل.س</strong><small>{fmt(item.companions)} مرافق · {fmt(item.carried_subjects)} مادة محمولة</small></td><td><span className={`status-badge ${STATUS[item.status]?.className || 'pending'}`}>{STATUS[item.status]?.label || item.status}</span></td><td>{humanDate(item.created_at)}</td></tr>)}</tbody></table></div>}
       </div>
-      <div className="panel review-panel">{selected ? <><div className="review-top"><span className="section-index">تفاصيل الطلب</span><span className={`status-badge ${STATUS[selected.status]?.className || 'pending'}`}>{STATUS[selected.status]?.label || selected.status}</span></div><h2>{selected.full_name}</h2><div className="review-code">{selected.tracking_code}</div><div className="review-details"><div><span>الرقم الجامعي</span><strong>{selected.university_number}</strong></div><div><span>القسم</span><strong>{selected.department}</strong></div><div><span>الاختصاص</span><strong>{selected.specialization}</strong></div><div><span>عدد المرافقين</span><strong>{fmt(selected.companions)}</strong></div><div><span>المبلغ الإجمالي</span><strong>{fmt(selected.amount_syp)} ل.س</strong></div><div><span>تاريخ الطلب</span><strong>{humanDate(selected.created_at)}</strong></div></div><button className="receipt-open-button" onClick={openReceipt}>عرض إيصال الدفع PDF ↗</button>{selected.status === 'rejected' && selected.rejection_reason && <div className="prior-reason"><strong>سبب الرفض المسجل</strong><p>{selected.rejection_reason}</p></div>}<div className="decision-divider" /><label className="field"><span>سبب الرفض (مطلوب عند الرفض)</span><textarea rows="3" maxLength="1000" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="مثال: الإيصال لا يطابق المبلغ المطلوب، يرجى إعادة الدفع ورفع إيصال واضح…" /></label><div className="decision-actions"><button className="reject-button" disabled={savingDecision} onClick={() => decide('rejected')}>رفض الطلب</button><button className="approve-button" disabled={savingDecision} onClick={() => decide('approved')}>✓ موافقة على الطلب</button></div><small className="muted-line">سيتم تسجيل حساب الموظف وتاريخ اتخاذ القرار.</small></> : <div className="review-empty"><div>☷</div><strong>اختر طلباً لمراجعته</strong><p>اضغط على أي صف في قائمة الطلبات لعرض التفاصيل وإيصال الدفع.</p></div>}</div></div>
-    </> : <div className="panel settings-panel"><div className="settings-header"><div><span className="section-index">تخصيص المنصة</span><h2>إعدادات التسجيل والدفع</h2><p>تطبق الرسوم ومعلومات الدفع الجديدة على الطلبات التالية، ولا تغيّر المبالغ المسجلة مسبقاً.</p></div><span className={`open-indicator ${localSettings.registration_open ? 'is-open' : ''}`}>{localSettings.registration_open ? 'التسجيل مفتوح' : 'التسجيل مغلق'}</span></div><form onSubmit={saveSettings}><div className="settings-grid"><label className="field"><span>عنوان الصفحة</span><input value={localSettings.event_title || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, event_title: e.target.value }))} required /></label><label className="field"><span>اسم الجامعة</span><input value={localSettings.university_label || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, university_label: e.target.value }))} required /></label><label className="field field-full"><span>الجهة المنظمة</span><input value={localSettings.organizer || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, organizer: e.target.value }))} required /></label><label className="field"><span>رسوم الطالب (ل.س)</span><input type="number" min="0" step="1" value={localSettings.student_fee ?? 0} onChange={(e) => setLocalSettings((s) => ({ ...s, student_fee: e.target.value }))} required /></label><label className="field"><span>رسوم المرافق الواحد (ل.س)</span><input type="number" min="0" step="1" value={localSettings.companion_fee ?? 0} onChange={(e) => setLocalSettings((s) => ({ ...s, companion_fee: e.target.value }))} required /></label><label className="field"><span>الحد الأقصى للمرافقين</span><input type="number" min="0" max="20" step="1" value={localSettings.max_companions ?? 4} onChange={(e) => setLocalSettings((s) => ({ ...s, max_companions: e.target.value }))} required /></label><label className="field"><span>حساب شام كاش</span><input value={localSettings.shamcash_account || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, shamcash_account: e.target.value }))} placeholder="أدخل الحساب أو المعرّف" /></label><label className="field field-full"><span>تعليمات الدفع للطلاب</span><textarea rows="3" value={localSettings.payment_instructions || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, payment_instructions: e.target.value }))} /></label><div className="field field-full"><span>رمز QR للدفع</span><div className="qr-admin-upload">{localSettings.qr_image_url && <img src={localSettings.qr_image_url} alt="رمز الدفع الحالي" />}<label className="secondary-button upload-qr-button">رفع صورة QR<input type="file" accept="image/*" onChange={(e) => uploadQr(e.target.files?.[0])} /></label><small>صورة PNG أو JPG، حتى 3 ميغابايت. سيتم نشرها ضمن بيانات الدفع العامة.</small></div></div><label className="toggle-row field-full"><input type="checkbox" checked={Boolean(localSettings.registration_open)} onChange={(e) => setLocalSettings((s) => ({ ...s, registration_open: e.target.checked }))} /><span className="toggle-look" /><span><strong>فتح التسجيل للطلاب</strong><small>عند إلغاء التحديد، يتوقف استقبال الطلبات الجديدة.</small></span></label></div><div className="settings-save-row"><button className="primary-button" disabled={savingSettings}><span>{savingSettings ? 'جارٍ الحفظ…' : 'حفظ الإعدادات'}</span><span className="button-arrow">←</span></button><button type="button" className="secondary-button" onClick={() => setLocalSettings(settings)}>إلغاء التعديلات</button></div></form></div>}
-    <div className="admin-footnote">مسجل الدخول: <strong>{staffUser.email}</strong> <span>•</span> لا تشارك بيانات دخول الفريق مع الطلاب.</div>
+      <div className="panel review-panel">{selected ? <><div className="review-top"><span className="section-index">تفاصيل الطلب</span><span className={`status-badge ${STATUS[selected.status]?.className || 'pending'}`}>{STATUS[selected.status]?.label || selected.status}</span></div><h2>{selected.full_name}</h2><div className="review-code" dir="ltr">{selected.tracking_code}</div><div className="review-details"><div><span>الرقم الجامعي</span><strong>{selected.university_number}</strong></div><div><span>هاتف التواصل</span><strong>{selected.phone_number || '—'}</strong></div><div><span>الكلية أو المعهد</span><strong>{selected.department}</strong></div><div><span>الاختصاص</span><strong>{selected.specialization || 'لا يوجد اختصاص'}</strong></div><div><span>المواد المحمولة</span><strong>{fmt(selected.carried_subjects)}</strong></div><div><span>عدد المرافقين</span><strong>{fmt(selected.companions)}</strong></div><div><span>المبلغ الإجمالي</span><strong>{fmt(selected.amount_syp)} ل.س</strong></div><div><span>تاريخ الطلب</span><strong>{humanDate(selected.created_at)}</strong></div></div><button className="receipt-open-button" onClick={openReceipt} disabled={!selected.receipt_path}>{selected.receipt_path ? 'عرض فاتورة الدفع PDF ↗' : 'لم تُرفع الفاتورة بعد'}</button>{selected.status === 'awaiting_payment' && <div className="important-warning"><strong>لا يمكن مراجعة هذا الطلب بعد</strong><p>الطلب بانتظار أن يدفع الطالب ويرفع فاتورة PDF. لن تظهر أزرار القرار قبل رفع الفاتورة.</p></div>}{selected.status === 'rejected' && selected.rejection_reason && <div className="prior-reason"><strong>سبب الرفض المسجل</strong><p>{selected.rejection_reason}</p></div>}{selected.receipt_path && <><div className="decision-divider" /><label className="field"><span>سبب الرفض (مطلوب عند الرفض)</span><textarea rows="3" maxLength="1000" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="اكتب سبب الرفض بوضوح ليظهر للطالب عند تتبع الطلب…" /></label><div className="decision-actions"><button className="reject-button" disabled={savingDecision} onClick={() => decide('rejected')}>رفض الطلب</button><button className="approve-button" disabled={savingDecision} onClick={() => decide('approved')}>✓ موافقة على الطلب</button></div><small className="muted-line">سيتم تسجيل حساب الموظف وتاريخ اتخاذ القرار.</small></>}</> : <div className="review-empty"><div>☷</div><strong>اختر طلباً لمراجعته</strong><p>اضغط على أي صف في قائمة الطلبات لعرض التفاصيل والفاتورة عند توفرها.</p></div>}</div></div>
+    </>}
+
+    {tab === 'settings' && isAdmin && <div className="panel settings-panel"><div className="settings-header"><div><span className="section-index">تخصيص المنصة</span><h2>الرسوم والدفع</h2><p>تطبق الإعدادات على الطلبات الجديدة. تبقى مبالغ الطلبات المنشأة سابقاً محفوظة كما هي.</p></div><span className={`open-indicator ${localSettings.registration_open ? 'is-open' : ''}`}>{localSettings.registration_open ? 'التسجيل العام مفتوح' : 'التسجيل العام مغلق'}</span></div><form onSubmit={saveSettings}><div className="settings-grid"><label className="field"><span>عنوان الصفحة</span><input value={localSettings.event_title || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, event_title: e.target.value }))} required /></label><label className="field"><span>اسم الجامعة</span><input value={localSettings.university_label || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, university_label: e.target.value }))} required /></label><label className="field field-full"><span>الجهة المنظمة</span><input value={localSettings.organizer || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, organizer: e.target.value }))} required /></label><label className="field"><span>رسوم الطالب (ل.س)</span><input type="number" min="0" step="1" value={localSettings.student_fee ?? 0} onChange={(e) => setLocalSettings((s) => ({ ...s, student_fee: e.target.value }))} required /></label><label className="field"><span>رسوم المرافق الواحد (ل.س)</span><input type="number" min="0" step="1" value={localSettings.companion_fee ?? 0} onChange={(e) => setLocalSettings((s) => ({ ...s, companion_fee: e.target.value }))} required /></label><label className="field"><span>الحد الأقصى للمرافقين</span><input type="number" min="0" max="20" step="1" value={localSettings.max_companions ?? 4} onChange={(e) => setLocalSettings((s) => ({ ...s, max_companions: e.target.value }))} required /></label><label className="field"><span>الحد الأقصى للمواد المحمولة</span><input type="number" min="0" max="30" step="1" value={localSettings.max_carried_subjects ?? 5} onChange={(e) => setLocalSettings((s) => ({ ...s, max_carried_subjects: e.target.value }))} required /><small className="field-help">يُرفض التسجيل تلقائياً إذا تجاوز الطالب الحد المحدد.</small></label><label className="field field-full"><span>رقم حساب شام كاش</span><input value={localSettings.shamcash_account || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, shamcash_account: e.target.value }))} placeholder="أدخل رقم الحساب أو معرّف الدفع" /></label><label className="field field-full"><span>ملاحظات إضافية تظهر للطلاب في صفحة الدفع</span><textarea rows="3" value={localSettings.payment_instructions || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, payment_instructions: e.target.value }))} /></label><div className="field field-full"><span>رمز QR للدفع</span><div className="qr-admin-upload">{localSettings.qr_image_url && <img src={localSettings.qr_image_url} alt="رمز الدفع الحالي" />}<label className="secondary-button upload-qr-button">رفع صورة QR<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => uploadQr(e.target.files?.[0])} /></label><small>صورة PNG أو JPG أو WebP، حتى 3 ميغابايت.</small></div></div><div className="field field-full"><span>صور توضيحية لخطوات الدفع (حتى 8 صور)</span><div className="payment-images-admin"><label className="secondary-button upload-qr-button">إضافة صور توضيحية<input type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={(e) => { uploadPaymentImages(Array.from(e.target.files || [])); e.target.value = ''; }} /></label><div className="payment-images-admin-grid">{(Array.isArray(localSettings.payment_images) ? localSettings.payment_images : []).map((url, index) => <figure key={url}><img src={url} alt={`صورة الدفع ${index + 1}`} /><button type="button" className="reject-button" onClick={() => setLocalSettings((old) => ({ ...old, payment_images: old.payment_images.filter((item) => item !== url) }))}>إزالة الصورة</button></figure>)}</div><small>بعد الإضافة أو الإزالة اضغط «حفظ الإعدادات» حتى تظهر التغييرات للطلاب.</small></div></div><label className="toggle-row field-full"><input type="checkbox" checked={Boolean(localSettings.registration_open)} onChange={(e) => setLocalSettings((s) => ({ ...s, registration_open: e.target.checked }))} /><span className="toggle-look" /><span><strong>فتح التسجيل العام</strong><small>يجب فتح التسجيل العام والجهة الدراسية والاختصاص حتى يستطيع الطالب التسجيل.</small></span></label></div><div className="settings-save-row"><button className="primary-button" disabled={savingSettings}><span>{savingSettings ? 'جارٍ الحفظ…' : 'حفظ الإعدادات'}</span><span className="button-arrow">←</span></button><button type="button" className="secondary-button" onClick={() => setLocalSettings({ ...DEFAULT_SETTINGS, ...settings, payment_images: Array.isArray(settings.payment_images) ? settings.payment_images : [] })}>إلغاء التعديلات</button></div></form></div>}
+
+    {tab === 'academic' && isAdmin && <div className="panel settings-panel catalog-admin-panel"><div className="settings-header"><div><span className="section-index">قوائم التسجيل</span><h2>إدارة الكليات والمعاهد والاختصاصات</h2><p>يمكنك فتح التسجيل أو إيقافه لكل كلية أو معهد ولكل اختصاص بشكل مستقل. التغييرات تنعكس على القوائم التي يراها الطلاب.</p></div><button className="secondary-button" type="button" onClick={refreshCatalog}>تحديث القوائم ↻</button></div>
+      {catalogError && <div className="notice notice-warning"><strong>قاعدة البيانات تحتاج إلى الترقية</strong><p>شغّل ملف supabase/migrations/002_staged_registration_and_academic_catalog.sql في SQL Editor أولاً. التفاصيل: {catalogError}</p></div>}
+      <form className="catalog-add-form" onSubmit={addUnit}><label className="field"><span>نوع الجهة</span><select value={newUnitType} onChange={(e) => setNewUnitType(e.target.value)}><option value="faculty">كلية</option><option value="institute">معهد</option></select></label><label className="field"><span>اسم الكلية أو المعهد</span><input value={newUnitName} onChange={(e) => setNewUnitName(e.target.value)} placeholder="مثال: كلية الهندسة المعلوماتية" required /></label><button className="primary-button" type="submit"><span>إضافة الجهة</span></button></form>
+      {units.length === 0 ? <div className="empty-state"><strong>لم تتم إضافة كليات أو معاهد بعد</strong><p>أضف الجهات التي تريد إتاحة التسجيل فيها، ثم أضف الاختصاصات إن وجدت.</p></div> : <div className="academic-units-list">{units.map((unit) => { const unitSpecs = specs.filter((spec) => spec.unit_id === unit.id); return <article className="academic-unit-card" key={unit.id}><div className="academic-unit-top"><div><span className="academic-unit-type">{unit.unit_type === 'institute' ? 'معهد' : 'كلية'}</span><h3>{unit.name}</h3><small>{unitSpecs.length} اختصاص مسجل</small></div><label className="catalog-toggle"><input type="checkbox" checked={Boolean(unit.is_open)} onChange={(e) => toggleUnit(unit, e.target.checked)} /><span>{unit.is_open ? 'التسجيل مفتوح' : 'التسجيل متوقف'}</span></label><button type="button" className="reject-button catalog-delete" onClick={() => deleteUnit(unit)}>حذف</button></div><div className="academic-specializations">{unitSpecs.length === 0 ? <p className="no-specs-admin">لم تتم إضافة اختصاصات لهذه الجهة؛ سيظهر للطالب «لا يوجد اختصاص».</p> : unitSpecs.map((spec) => <div className="specialization-row" key={spec.id}><span>{spec.name}</span><label className="catalog-toggle"><input type="checkbox" checked={Boolean(spec.is_open)} disabled={!unit.is_open} onChange={(e) => toggleSpecialization(spec, e.target.checked)} /><span>{spec.is_open ? 'مفتوح' : 'مغلق'}</span></label><button type="button" className="text-delete" onClick={() => deleteSpecialization(spec)}>حذف</button></div>)}</div></article>; })}</div>}
+      <div className="specialization-add-box"><h3>إضافة اختصاص إلى كلية أو معهد</h3><form className="catalog-add-form" onSubmit={addSpecialization}><label className="field"><span>الكلية أو المعهد</span><select value={specializationTargetUnit} onChange={(e) => setSpecializationTargetUnit(e.target.value)} required><option value="">اختر الجهة</option>{units.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></label><label className="field"><span>اسم الاختصاص</span><input value={newSpecializationName} onChange={(e) => setNewSpecializationName(e.target.value)} placeholder="مثال: هندسة البرمجيات" required /></label><button className="primary-button" type="submit" disabled={units.length === 0}><span>إضافة الاختصاص</span></button></form></div>
+    </div>}
+    <div className="admin-footnote">مسجل الدخول: <strong>{staffUser.email}</strong> <span>•</span> صلاحية الحساب: <strong>{isAdmin ? 'مدير' : 'مراجع'}</strong> <span>•</span> لا تشارك بيانات دخول الفريق مع الطلاب.</div>
   </section>;
 }
 

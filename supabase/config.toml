@@ -1,0 +1,15 @@
+project_id = "latakia-graduation-registration"
+
+# Public endpoints: students do not create accounts. They validate data server-side.
+# Add rate limiting / Turnstile before widely advertising the registration link.
+[functions.submit-application]
+verify_jwt = false
+
+[functions.upload-payment-receipt]
+verify_jwt = false
+
+[functions.track-application]
+verify_jwt = false
+
+[functions.verify-ticket]
+verify_jwt = false

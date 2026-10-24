@@ -4,6 +4,7 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Cache-Control': 'no-store',
 };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -22,22 +23,36 @@ Deno.serve(async (request) => {
   try {
     const body = await request.json();
     const code = String(body.tracking_code || '').trim().toUpperCase();
-    const universityNumber = String(body.university_number || '').trim();
-    if (!/^LAT-[A-F0-9]{10}$/.test(code) || !universityNumber || universityNumber.length > 32) {
-      return json({ error: 'لم يتم العثور على طلب مطابق. تحقق من كود المتابعة والرقم الجامعي.' }, 404);
+    // نقبل الأكواد القديمة للاختبارات السابقة، والأكواد الجديدة الأقوى ذات 128 بت.
+    if (!/^LAT-(?:[A-F0-9]{10}|[A-F0-9]{32})$/.test(code)) {
+      return json({ error: 'أدخل رمز التتبع كاملاً كما ظهر بعد التسجيل.' }, 400);
     }
 
     const { data, error } = await admin.from('applications')
-      .select('tracking_code, full_name, university_number, amount_syp, status, rejection_reason, created_at, companions')
+      .select('id, tracking_code, full_name, university_number, phone_number, amount_syp, status, rejection_reason, created_at, companions, carried_subjects, department, specialization')
       .eq('tracking_code', code)
-      .eq('university_number', universityNumber)
       .maybeSingle();
     if (error) {
       console.error('track application failed', error.message);
       return json({ error: 'تعذر جلب حالة الطلب حالياً.' }, 500);
     }
-    if (!data) return json({ error: 'لم يتم العثور على طلب مطابق. تحقق من كود المتابعة والرقم الجامعي.' }, 404);
-    return json({ application: data });
+    if (!data) return json({ error: 'لم يتم العثور على طلب مطابق. تأكد من كتابة رمز التتبع كاملاً.' }, 404);
+
+    let tickets: Array<{ ticket_type: string; ticket_number: number; ticket_token: string }> = [];
+    if (data.status === 'approved') {
+      const { data: ticketRows, error: ticketError } = await admin.from('entry_tickets')
+        .select('ticket_type, ticket_number, ticket_token')
+        .eq('application_id', data.id)
+        .order('ticket_number', { ascending: true });
+      if (ticketError) {
+        console.error('entry tickets lookup failed', ticketError.message);
+        return json({ error: 'تم قبول الطلب، لكن تعذّر تحميل بطاقات الدخول الآن. حاول تحديث الصفحة.' }, 500);
+      }
+      tickets = ticketRows || [];
+    }
+
+    const { id: _id, ...application } = data;
+    return json({ application: { ...application, tickets } });
   } catch (error) {
     console.error('track-application error', error);
     return json({ error: 'تعذر التحقق من الطلب. يرجى المحاولة مجدداً.' }, 400);
