@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { anonKeyValue, functionUrl, isConfigured, supabase } from './lib/supabase';
+import { anonKeyValue, configurationProblem, functionUrl, isConfigured, supabase } from './lib/supabase';
 
 const DEFAULT_SETTINGS = {
   id: 1,
@@ -186,7 +186,7 @@ function App() {
         <section className="container content-grid" id="registration">
           <div className="form-column">
             <div className="section-heading"><div><span className="section-index">01 / التسجيل</span><h2>بيانات الطالب</h2><p>يرجى إدخال المعلومات تماماً كما تظهر في سجلك الجامعي.</p></div><div className="heading-icon">▤</div></div>
-            {!isConfigured && <div className="notice notice-warning"><span className="notice-icon">ⓘ</span><div><strong>الموقع في وضع الإعداد</strong><p>الواجهة جاهزة للمعاينة، لكن حفظ الطلبات ورفع الملفات يحتاج ربط قاعدة البيانات باتباع دليل README.</p></div></div>}
+            {!isConfigured && <div className="notice notice-warning"><span className="notice-icon">ⓘ</span><div><strong>الموقع في وضع الإعداد</strong><p>{configurationProblem === 'invalid-url' ? 'عنوان Supabase في إعدادات النشر غير صحيح. راجع VITE_SUPABASE_URL في Cloudflare.' : 'الواجهة جاهزة للمعاينة، لكن حفظ الطلبات ورفع الملفات يحتاج إعداد متغيرات Supabase في Cloudflare.'}</p></div></div>}
             {registrationUnavailable && <div className="notice notice-info"><span className="notice-icon">◷</span><div><strong>التسجيل غير مفتوح حالياً</strong><p>سيظهر نموذج التسجيل بشكل فعّال بعد أن يفتح فريق التنظيم التسجيل من لوحة التحكم.</p></div></div>}
             <form className="panel registration-form" onSubmit={handleSubmit}>
               <div className="form-panel-title"><span className="step-circle">1</span><div><strong>المعلومات الشخصية والجامعية</strong><small>جميع الحقول التالية مطلوبة</small></div></div>
