@@ -1,8 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import QRCode from 'qrcode';
+import JSZip from 'jszip';
+import { BrowserQRCodeReader } from '@zxing/browser';
 import { anonKeyValue, configurationProblem, functionUrl, isConfigured, supabase } from './lib/supabase';
 import { createReceiptArchivePdf, downloadBlob as downloadArchiveBlob, safeArchiveFilename, saveArchiveToDirectory, sha256Blob } from './lib/localArchive';
 import { downloadTicketsAsOnePdf, downloadTicketsSeparatelyZip } from './lib/ticketDownloads';
+import FinancialLedgerPanel from './components/FinancialLedgerPanel.jsx';
 
 const DEFAULT_SETTINGS = {
   id: 1,
@@ -45,7 +48,8 @@ function App() {
   const [catalogError, setCatalogError] = useState('');
   const ticketTokenFromUrl = new URLSearchParams(window.location.search).get('ticket') || '';
   const teamRouteRequested = new URLSearchParams(window.location.search).get('team') === '1';
-  const [page, setPage] = useState(() => ticketTokenFromUrl ? 'verify' : teamRouteRequested ? 'staff' : 'register');
+  const gateRouteRequested = new URLSearchParams(window.location.search).get('gate') === '1';
+  const [page, setPage] = useState(() => ticketTokenFromUrl ? 'verify' : (teamRouteRequested || gateRouteRequested) ? 'staff' : 'register');
   const [registrationStage, setRegistrationStage] = useState(() => safeSessionGet() ? 'code' : 'details');
   const [toast, setToast] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -142,7 +146,7 @@ function App() {
       setStaffUser(session?.user ?? null);
       if (!session?.user) {
         setStaffRole(null);
-        setPage((current) => (current === 'admin' || current === 'staff-password') ? 'staff' : current);
+        setPage((current) => (['admin', 'staff-password', 'finance', 'gate'].includes(current)) ? 'staff' : current);
       } else {
         window.setTimeout(() => loadStaffRole(session.user.id), 0);
       }
@@ -293,13 +297,16 @@ function App() {
         await supabase.auth.signOut();
         throw new Error('هذا الحساب غير مخوّل للوصول إلى لوحة الفريق. اطلب من مدير النظام إضافته إلى فريق المراجعة.');
       }
-      setStaffUser(data.user); setStaffRole(role.role); window.history.replaceState({}, '', `${window.location.pathname}?team=1`);
+      setStaffUser(data.user); setStaffRole(role.role);
+      const requestedGate = new URLSearchParams(window.location.search).get('gate') === '1';
+      const landingPage = role.role === 'finance' ? 'finance' : role.role === 'gate' ? 'gate' : requestedGate && role.role === 'admin' ? 'gate' : 'admin';
+      window.history.replaceState({}, '', `${window.location.pathname}?${landingPage === 'gate' ? 'gate=1' : 'team=1'}`);
       if (data.user.app_metadata?.must_change_password) {
         setPage('staff-password');
         notify('لأمان الحساب، غيّر كلمة المرور المؤقتة قبل متابعة العمل.', 'info');
       } else {
-        setPage('admin');
-        notify('مرحباً بك في لوحة المراجعة.', 'success');
+        setPage(landingPage);
+        notify(landingPage === 'gate' ? 'تم الدخول إلى بوابة التحقق.' : landingPage === 'finance' ? 'مرحباً بك في لوحة الجرد المالي.' : 'مرحباً بك في لوحة الفريق.', 'success');
       }
     } catch (error) { notify(error.message || 'تعذر تسجيل الدخول.', 'error'); }
     finally { setAuthChecking(false); }
@@ -316,7 +323,7 @@ function App() {
       const { data: completion, error: completionError } = await supabase.functions.invoke('manage-staff', { body: { action: 'complete_password_change' } });
       if (completionError || completion?.error) throw new Error(completion?.error || completionError?.message || 'تم تغيير كلمة المرور، لكن تعذر تسجيل اكتمال خطوة الأمان. اضغط حفظ مجددًا للمحاولة.');
       if (data.user) setStaffUser(data.user);
-      setNewStaffPassword(''); setConfirmStaffPassword(''); setPage('admin');
+      setNewStaffPassword(''); setConfirmStaffPassword(''); setPage(staffRole === 'finance' ? 'finance' : staffRole === 'gate' ? 'gate' : new URLSearchParams(window.location.search).get('gate') === '1' ? 'gate' : 'admin');
       notify('تم تغيير كلمة المرور. أهلاً بك في لوحة الفريق.', 'success');
     } catch (error) { notify(error.message || 'تعذر تغيير كلمة المرور.', 'error'); }
     finally { setAuthChecking(false); }
@@ -442,12 +449,14 @@ function App() {
           {trackingResult ? <div className="panel track-result"><div className="result-header"><span className="section-index">نتيجة الاستعلام</span><span className={`status-badge ${STATUS[trackingResult.status]?.className || 'pending'}`}>{STATUS[trackingResult.status]?.label || trackingResult.status}</span></div><h2>{trackingResult.full_name}</h2><div className="result-code"><span>رمز التتبع</span><strong dir="ltr">{trackingResult.tracking_code}</strong></div><div className="result-meta"><div><span>تاريخ التقديم</span><strong>{humanDate(trackingResult.created_at)}</strong></div><div><span>المبلغ المسجل</span><strong>{fmt(trackingResult.amount_syp)} ل.س</strong></div><div><span>الكلية أو المعهد</span><strong>{trackingResult.department}</strong></div><div><span>الاختصاص</span><strong>{trackingResult.specialization}</strong></div></div>{trackingResult.status === 'awaiting_payment' && <><div className="important-warning"><strong>الطلب بانتظار الفاتورة</strong><p>أتمم التحويل مع كتابة رمز التتبع في الملاحظات، ثم ارفع فاتورة PDF هنا.</p></div><form className="track-receipt-form" onSubmit={handleTrackReceiptUpload}><label className="field"><span>فاتورة التحويل PDF <b>*</b></span><input type="file" accept="application/pdf,.pdf" onChange={(e) => setTrackReceipt(e.target.files?.[0] || null)} required /></label><button className="primary-button" disabled={trackReceiptBusy || !trackReceipt}><span>{trackReceiptBusy ? 'جارٍ الرفع…' : 'رفع الفاتورة'}</span></button></form></>}{trackingResult.status === 'pending' && <p className="result-message">تم استلام الفاتورة؛ طلبك قيد المراجعة من قبل فريق التنظيم.</p>}{trackingResult.status === 'approved' && <><ApprovalCelebration name={trackingResult.full_name} /><TicketGallery tickets={trackingResult.tickets || []} application={trackingResult} batchName={settings.batch_name || DEFAULT_SETTINGS.batch_name} /></>}{trackingResult.status === 'rejected' && <div className="rejection-message"><strong>سبب الرفض</strong><p>{trackingResult.rejection_reason || 'يرجى التواصل مع فريق التنظيم لمعرفة التفاصيل.'}</p></div>}</div> : <div className="track-help"><div className="big-lock">⌑</div><h3>بياناتك محمية</h3><p>لا يظهر طلبك إلا لمن يمتلك رمز التتبع الفريد.</p></div>}
         </div></section>}
 
-      {page === 'verify' && <section className="container inner-page ticket-verification-page"><div className="inner-hero"><span className="section-index">التحقق من بطاقة الدخول</span><h1>بوابة التحقق لحفل التخرج</h1><p>تحقق من صلاحية البطاقة ونوعها قبل السماح بالدخول.</p></div>{ticketVerifyBusy && <div className="panel verification-state"><div className="verification-spinner" /><h2>جارٍ التحقق من رمز QR…</h2></div>}{!ticketVerifyBusy && ticketVerifyError && <div className="panel verification-state invalid-ticket"><div className="verification-symbol">×</div><h2>تعذّر التحقق من البطاقة</h2><p>{ticketVerifyError}</p></div>}{!ticketVerifyBusy && ticketVerification?.valid && <VerifiedTicket verification={ticketVerification} />}</section>}
+      {page === 'verify' && <section className="container inner-page ticket-verification-page"><div className="inner-hero"><span className="section-index">التحقق من بطاقة الدخول</span><h1>بوابة التحقق لحفل التخرج</h1><p>هذه الصفحة للقراءة والتحقق فقط ولا تسجّل دخولًا. تسجيل الحضور يتم حصريًا من ماسح QR داخل بوابة فريق التنظيم.</p></div>{ticketVerifyBusy && <div className="panel verification-state"><div className="verification-spinner" /><h2>جارٍ التحقق من رمز QR…</h2></div>}{!ticketVerifyBusy && ticketVerifyError && <div className="panel verification-state invalid-ticket"><div className="verification-symbol">×</div><h2>تعذّر التحقق من البطاقة</h2><p>{ticketVerifyError}</p></div>}{!ticketVerifyBusy && ticketVerification?.valid && <VerifiedTicket verification={ticketVerification} />}</section>}
 
       {page === 'staff' && <section className="container inner-page staff-page"><div className="inner-hero"><span className="section-index">للاستخدام الداخلي</span><h1>بوابة فريق التنظيم</h1><p>صفحة داخلية غير ظاهرة في قائمة الموقع العامة. الدخول مخصص للحسابات التي أنشأها مدير النظام فقط.</p></div><div className="staff-login-layout"><div className="panel staff-login-card"><div className="staff-login-mark">⌑</div><h2>تسجيل دخول الفريق</h2><p>استخدم بيانات الحساب المصرّح به من مدير النظام.</p><form onSubmit={handleLogin}><label className="field"><span>البريد الإلكتروني</span><div className="input-wrap"><input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" placeholder="name@example.com" /></div></label><label className="field"><span>كلمة المرور</span><div className="input-wrap"><input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" placeholder="أدخل كلمة المرور" /></div></label><button className="primary-button" disabled={authChecking || !isConfigured}><span>{authChecking ? 'جارٍ التحقق…' : 'تسجيل الدخول'}</span><span className="button-arrow">←</span></button>{!isConfigured && <small className="muted-line">إعداد قاعدة البيانات مطلوب قبل تسجيل الدخول.</small>}</form></div><div className="staff-login-info"><span className="section-index">صلاحيات المراجعة</span><h2>الطلبات المصرح بها فقط.</h2><p>تُحدد صلاحية كل حساب حسب الكليات والاختصاصات المسموح له بمراجعتها. لا يكفي إخفاء رابط الدخول وحده لحماية البيانات؛ يتم تطبيق الصلاحيات من قاعدة البيانات. يستطيع المدير وحده تعديل الرسوم وقوائم الكليات والاختصاصات.</p><div className="staff-feature"><span>✓</span><div><strong>مراجعة الإيصالات</strong><small>فتح ملف PDF من مساحة تخزين خاصة</small></div></div><div className="staff-feature"><span>✓</span><div><strong>توثيق القرار</strong><small>تسجيل الموافقة أو سبب الرفض وتاريخ المراجعة</small></div></div><div className="staff-feature"><span>✓</span><div><strong>إدارة قوائم التسجيل</strong><small>الكليات والمعاهد والاختصاصات وحدود المواد المحمولة</small></div></div></div></div></section>}
 
       {page === 'staff-password' && staffUser && <section className="container inner-page staff-page"><div className="inner-hero"><span className="section-index">خطوة أمان مطلوبة</span><h1>غيّر كلمة المرور المؤقتة</h1><p>يجب تعيين كلمة مرور شخصية قبل استخدام لوحة فريق التنظيم. استخدم كلمة مرور طويلة وفريدة ولا تشاركها مع أحد.</p></div><div className="staff-login-layout"><form className="panel staff-login-card" onSubmit={handleForcedPasswordChange}><h2>كلمة مرور جديدة</h2><label className="field"><span>كلمة المرور الجديدة</span><input type="password" required minLength={12} autoComplete="new-password" value={newStaffPassword} onChange={(e) => setNewStaffPassword(e.target.value)} placeholder="12 محرفاً على الأقل" /></label><label className="field"><span>تأكيد كلمة المرور</span><input type="password" required minLength={12} autoComplete="new-password" value={confirmStaffPassword} onChange={(e) => setConfirmStaffPassword(e.target.value)} placeholder="أعد كتابة كلمة المرور" /></label><button className="primary-button" disabled={authChecking}><span>{authChecking ? 'جارٍ الحفظ…' : 'حفظ كلمة المرور والمتابعة'}</span></button><button type="button" className="secondary-button" onClick={signOut}>تسجيل الخروج</button></form></div></section>}
-      {page === 'admin' && staffUser && <AdminDashboard staffUser={staffUser} staffRole={staffRole} settings={settings} setSettings={setSettings} refreshSettings={loadSettings} catalog={catalog} catalogError={catalogError} refreshCatalog={loadCatalog} notify={notify} onSignOut={signOut} />}
+      {page === 'admin' && staffUser && ['admin', 'reviewer'].includes(staffRole) && <AdminDashboard staffUser={staffUser} staffRole={staffRole} settings={settings} setSettings={setSettings} refreshSettings={loadSettings} catalog={catalog} catalogError={catalogError} refreshCatalog={loadCatalog} notify={notify} onSignOut={signOut} />}
+      {page === 'gate' && staffUser && ['admin', 'gate'].includes(staffRole) && <GateDashboard staffUser={staffUser} staffRole={staffRole} notify={notify} onSignOut={signOut} />}
+      {page === 'finance' && staffUser && ['admin', 'finance'].includes(staffRole) && <FinancialDashboard staffRole={staffRole} notify={notify} onSignOut={signOut} standalone />}
     </main>
 
     <footer className="site-footer"><div className="container footer-inner"><div className="footer-brand"><img className="brand-logo small-brand-logo" src="/brand/ssu-emblem.png" alt="" /><div><strong>{settings.organizer || DEFAULT_SETTINGS.organizer}</strong><span>{settings.university_label || DEFAULT_SETTINGS.university_label}</span></div></div><p>منصة التسجيل لحفلات التخرج · {settings.batch_name || DEFAULT_SETTINGS.batch_name} · {new Date().getFullYear()}</p><span className="footer-status"><i className="dot" /> نظام التسجيل والمتابعة</span></div></footer>
@@ -534,6 +543,257 @@ function VerifiedTicket({ verification }) {
     <div className="important-warning verified-ticket-warning"><strong>تعليمات البوابة</strong><p>{isGraduate ? 'طابق اسم الخريج ورقمه الجامعي مع وثيقة الطالب عند الحاجة.' : `هذه البطاقة خاصة بمرافق واحد للخريج ${graduate.full_name}. لا تستخدمها لدخول مرافق آخر.`}</p></div>
     <p className="verification-note">{verification.message}</p>
   </div>;
+}
+
+function extractTicketToken(raw) {
+  return String(raw || '').match(/TKT-[A-F0-9]{32}/i)?.[0]?.toUpperCase() || '';
+}
+
+function GateOperationsPanel({ staffUser, staffRole, notify, embedded = false, onSignOut }) {
+  const [cameraActive, setCameraActive] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const [manualInput, setManualInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const videoRef = useRef(null);
+  const readerRef = useRef(null);
+  const controlsRef = useRef(null);
+  const processingRef = useRef(false);
+
+  const checkIn = useCallback(async (raw) => {
+    const token = extractTicketToken(raw);
+    if (!token) return notify('لم يتم العثور على رمز بطاقة QR صحيح. يمكنك لصق الرابط الكامل أو رمز TKT.', 'error');
+    setBusy(true); setResult(null); setCameraError('');
+    try {
+      const { data, error } = await supabase.functions.invoke('check-in-ticket', { body: { ticket_token: token } });
+      if (error) {
+        let body = null;
+        try { if (error.context && typeof error.context.json === 'function') body = await error.context.json(); } catch { /* optional response body */ }
+        throw new Error(body?.error || error.message || 'تعذر التحقق من بطاقة الدخول.');
+      }
+      if (!data || data.status === 'invalid' || data.status === 'error') throw new Error(data?.message || data?.error || 'البطاقة غير صالحة.');
+      setResult(data);
+      if (data.status === 'checked_in') notify('تم تسجيل دخول البطاقة بنجاح.', 'success');
+      else if (data.status === 'already_used') notify('تنبيه: استُخدمت هذه البطاقة سابقًا.', 'error');
+      else notify(data.message || 'تم التحقق من البطاقة.', 'info');
+    } catch (error) {
+      setResult({ status: 'error', message: error.message || 'تعذر تسجيل الدخول.' });
+      notify(error.message || 'تعذر تسجيل الدخول.', 'error');
+    } finally { setBusy(false); }
+  }, [notify]);
+
+  useEffect(() => {
+    if (!cameraActive || !videoRef.current) return undefined;
+    let cancelled = false;
+    const reader = new BrowserQRCodeReader();
+    readerRef.current = reader;
+    setCameraError('');
+    reader.decodeFromVideoDevice(undefined, videoRef.current, (decoded, _err, controls) => {
+      if (controls) controlsRef.current = controls;
+      if (cancelled || !decoded || processingRef.current) return;
+      const raw = decoded.getText();
+      if (!extractTicketToken(raw)) return;
+      processingRef.current = true;
+      setManualInput(extractTicketToken(raw));
+      setCameraActive(false);
+      checkIn(raw).finally(() => { processingRef.current = false; });
+    }).catch((error) => {
+      if (!cancelled) {
+        setCameraError(error?.message || 'تعذر تشغيل الكاميرا. تحقق من إذن الكاميرا أو استخدم إدخال الرمز يدويًا.');
+        setCameraActive(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+      try { controlsRef.current?.stop(); } catch { /* ignore */ }
+      controlsRef.current = null;
+      try { reader.reset(); } catch { /* ignore */ }
+    };
+  }, [cameraActive, checkIn]);
+
+  function handleManualSubmit(event) {
+    event.preventDefault();
+    if (busy) return;
+    checkIn(manualInput);
+  }
+
+  return <div className={`panel settings-panel gate-operations-panel ${embedded ? 'embedded-ops-panel' : ''}`}>
+    <div className="settings-header"><div><span className="section-index">مخصص لفريق التنظيم</span><h2>بوابة التحقق وتسجيل الدخول</h2><p>المسح من كاميرا الهاتف هنا فقط هو الذي يسجل دخول البطاقة. فتح QR بكاميرا الهاتف العادية يعرض صفحة معلومات للقراءة فقط ولا يلغي البطاقة.</p></div><span className="status-badge approved">دخول الموظف: {staffUser?.email || 'موظف مخوّل'}</span></div>
+    <div className="gate-scan-layout">
+      <div className="gate-camera-box">
+        <video ref={videoRef} className={`gate-camera-video ${cameraActive ? 'is-active' : ''}`} muted playsInline />
+        {!cameraActive && <div className="gate-camera-placeholder"><span className="gate-scan-frame" aria-hidden="true" /><strong>وجّه كاميرا الهاتف إلى QR البطاقة</strong><small>تسجيل الدخول يتم مرة واحدة وبصلاحية حساب الموظف فقط.</small></div>}
+        <div className="gate-camera-actions">{cameraActive ? <button type="button" className="reject-button" onClick={() => setCameraActive(false)}>إيقاف الكاميرا</button> : <button type="button" className="primary-button" disabled={busy} onClick={() => { setResult(null); setCameraError(''); setCameraActive(true); }}>تشغيل ماسح QR</button>}</div>
+        {cameraError && <div className="notice notice-warning" role="alert">{cameraError}</div>}
+        {typeof window !== 'undefined' && !('mediaDevices' in navigator) && <p className="muted-line">لا يدعم هذا المتصفح تشغيل الكاميرا. استخدم خانة إدخال الرمز أدناه.</p>}
+      </div>
+      <div className="gate-manual-box">
+        <h3>إدخال الرمز يدويًا</h3><p>استخدم هذا الخيار إذا لم تعمل الكاميرا أو كانت البطاقة مطبوعة بصورة غير واضحة.</p>
+        <form onSubmit={handleManualSubmit}><label className="field"><span>رمز البطاقة أو رابط QR</span><input value={manualInput} onChange={(e) => setManualInput(e.target.value.toUpperCase())} placeholder="TKT-… أو الصق الرابط الكامل" dir="ltr" required /></label><button className="primary-button" type="submit" disabled={busy || !manualInput.trim()}>{busy ? 'جارٍ التحقق…' : 'التحقق وتسجيل الدخول'}</button></form>
+        <div className="important-warning"><strong>قاعدة البوابة</strong><p>كل تذكرة تُسجل مرة واحدة فقط. إذا ظهرت «مستخدمة سابقًا» فلا تسمح بالدخول بالبطاقة نفسها، واطلب مراجعة المشرف إذا كان هناك اعتراض.</p></div>
+      </div>
+    </div>
+    {result && <div className={`gate-result-card ${result.status === 'checked_in' ? 'gate-result-success' : result.status === 'already_used' ? 'gate-result-used' : 'gate-result-error'}`} role="status">
+      <span className="section-index">نتيجة المسح</span><h3>{result.status === 'checked_in' ? 'تم تسجيل الدخول ✓' : result.status === 'already_used' ? 'البطاقة مستخدمة سابقًا' : 'لم يتم تسجيل الدخول'}</h3><p>{result.message || result.error}</p>
+      {result.full_name && <div className="gate-result-details"><div><span>اسم الخريج</span><strong>{result.full_name}</strong></div><div><span>نوع البطاقة</span><strong>{result.ticket_type === 'graduate' ? 'الخريج' : `مرافق رقم ${fmt(result.ticket_number)}`}</strong></div>{result.department && <div><span>الكلية/المعهد</span><strong>{result.department}</strong></div>}{result.specialization && <div><span>الاختصاص</span><strong>{result.specialization}</strong></div>}{result.checked_in_at && <div><span>وقت الاستخدام الأول</span><strong>{humanDate(result.checked_in_at)}</strong></div>}</div>}
+      <button className="secondary-button" type="button" onClick={() => { setResult(null); setManualInput(''); }}>مسح نتيجة والانتقال للبطاقة التالية</button>
+    </div>}
+  </div>;
+}
+
+function GateDashboard({ staffUser, staffRole, notify, onSignOut }) {
+  return <section className="container inner-page gate-dashboard"><div className="inner-hero"><span className="section-index">صلاحية بوابة الدخول</span><h1>التحقق من بطاقات حفل التخرج</h1><p>لا يُسجّل أي QR دخولًا إلا من هذه الصفحة بعد التحقق من حساب الفريق.</p></div><GateOperationsPanel staffUser={staffUser} staffRole={staffRole} notify={notify} /><button className="secondary-button full-width-button" onClick={onSignOut}>تسجيل الخروج</button></section>;
+}
+
+function FinancialDashboard({ staffRole, notify, onSignOut, standalone = false, embedded = false }) {
+  const [payments, setPayments] = useState([]);
+  const [closings, setClosings] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [statusFilter, setStatusFilter] = useState('unverified');
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [selectedId, setSelectedId] = useState('');
+  const [transactionRef, setTransactionRef] = useState('');
+  const [receivedAmount, setReceivedAmount] = useState('');
+  const [transferAt, setTransferAt] = useState('');
+  const [payerNote, setPayerNote] = useState('');
+  const [verificationNotes, setVerificationNotes] = useState('');
+  const [outcome, setOutcome] = useState('matched');
+  const [checkedAgainstStatement, setCheckedAgainstStatement] = useState(false);
+  const [closingDate, setClosingDate] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; });
+  const [statementCount, setStatementCount] = useState('');
+  const [statementTotal, setStatementTotal] = useState('');
+  const [closingNotes, setClosingNotes] = useState('');
+  const [overrideReason, setOverrideReason] = useState('');
+  const isAdmin = staffRole === 'admin';
+  const selected = payments.find((p) => p.application_id === selectedId) || null;
+
+  const callFinancial = useCallback(async (payload) => {
+    const { data, error } = await supabase.functions.invoke('financial-management', { body: payload });
+    if (error) {
+      let body = null;
+      try { if (error.context && typeof error.context.json === 'function') body = await error.context.json(); } catch { /* optional response body */ }
+      throw new Error(body?.error || error.message || 'تعذر الاتصال بوحدة الجرد المالي.');
+    }
+    if (data?.error) {
+      if (data.reconciliation) notify(`الفرق: ${fmt(data.reconciliation.difference_count)} حركة، ${fmt(data.reconciliation.difference_amount_syp)} ل.س. لا يُقفل اليوم قبل معالجة الفرق أو تسجيل استثناء إداري موثق.`, 'error');
+      throw new Error(data.error);
+    }
+    return data;
+  }, [notify]);
+
+  const refresh = useCallback(async (nextOffset = offset, nextStatus = statusFilter) => {
+    setLoading(true);
+    try {
+      const data = await callFinancial({ action: 'list', offset: nextOffset, limit: 50, reconciliation_status: nextStatus });
+      setPayments(data.payments || []); setTotal(data.total || 0); setClosings(data.closings || []);
+    } catch (error) { notify(error.message, 'error'); }
+    finally { setLoading(false); }
+  }, [callFinancial, notify, offset, statusFilter]);
+  useEffect(() => { refresh(offset, statusFilter); }, [refresh, offset, statusFilter]);
+
+  function choosePayment(payment) {
+    setSelectedId(payment.application_id);
+    setTransactionRef(payment.transaction_reference || '');
+    setReceivedAmount(payment.received_amount_syp == null ? String(payment.expected_amount_syp ?? payment.application?.amount_syp ?? '') : String(payment.received_amount_syp));
+    setTransferAt(payment.transfer_at ? new Date(payment.transfer_at).toISOString().slice(0,16) : '');
+    setPayerNote(payment.payer_note || ''); setVerificationNotes(payment.verification_notes || '');
+    setOutcome(payment.reconciliation_status === 'matched' ? 'matched' : payment.reconciliation_status === 'mismatch' ? 'mismatch' : payment.reconciliation_status === 'not_found' ? 'not_found' : payment.reconciliation_status === 'suspected' ? 'suspected' : 'matched');
+    setCheckedAgainstStatement(Boolean(payment.checked_against_statement));
+  }
+
+  async function openReceipt(payment) {
+    const tab = window.open('about:blank', '_blank');
+    try { const result = await callFinancial({ action: 'receipt_url', application_id: payment.application_id }); if (tab) tab.location.href = result.url; else window.location.href = result.url; }
+    catch (error) { if (tab) tab.close(); notify(error.message, 'error'); }
+  }
+
+  async function saveReview(event) {
+    event.preventDefault(); if (!selected) return;
+    if (outcome === 'matched' && !checkedAgainstStatement) return notify('افتح حساب شام كاش أو الكشف الرسمي وتأكد من ظهور الحركة الفعلية قبل اختيار «مطابق».', 'error');
+    setBusy(true);
+    try {
+      const result = await callFinancial({ action: 'save_review', application_id: selected.application_id, transaction_reference: transactionRef, received_amount_syp: receivedAmount, transfer_at: transferAt ? new Date(transferAt).toISOString() : '', payer_note: payerNote, verification_notes: verificationNotes, reconciliation_status: outcome, checked_against_statement: checkedAgainstStatement });
+      notify(result.warning || result.message || 'تم حفظ المراجعة المالية.', result.warning ? 'warning' : 'success');
+      await refresh(offset, statusFilter);
+    } catch (error) { notify(error.message || 'تعذر حفظ المطابقة.', 'error'); }
+    finally { setBusy(false); }
+  }
+
+  async function closeDay(event) {
+    event.preventDefault(); setBusy(true);
+    try {
+      const result = await callFinancial({ action: 'close_day', closing_date: closingDate, statement_transaction_count: statementCount, statement_total_syp: statementTotal, notes: closingNotes, override_reason: overrideReason });
+      notify(result.message || 'تم حفظ الإقفال اليومي.', 'success'); setOverrideReason(''); await refresh(0, statusFilter);
+    } catch (error) { notify(error.message || 'تعذر إقفال اليوم.', 'error'); }
+    finally { setBusy(false); }
+  }
+
+  const shell = <div className={`panel settings-panel finance-dashboard ${embedded ? 'embedded-ops-panel' : ''}`}>
+    <div className="settings-header"><div><span className="section-index">الرقابة المالية</span><h2>مطابقة التحويلات والجرد اليومي</h2><p>لا يكفي ملف PDF وحده لإثبات الدفع. يجب مطابقة المبلغ ورقم الحركة مع سجل شام كاش الفعلي أو كشف رسمي، ويمنع النظام استخدام رقم الحركة نفسه لطلبين.</p></div><button type="button" className="secondary-button" onClick={() => refresh(0, statusFilter)} disabled={loading}>تحديث ↻</button></div>
+    <div className="finance-warning"><strong>إجراء مسؤول مالي</strong><p>لا تضع حالة «مطابق» إلا بعد رؤية التحويل الفعلي في حساب شام كاش أو كشف الحساب. لا يوجد تحقق آلي من شام كاش في هذه النسخة.</p></div>
+    <div className="finance-list-toolbar"><label className="field"><span>حالة المطابقة</span><select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setOffset(0); }}><option value="unverified">بانتظار المطابقة</option><option value="all">كل السجلات</option><option value="matched">مطابقة ناجحة</option><option value="mismatch">اختلاف مبلغ</option><option value="suspected">مشتبه به</option><option value="not_found">لم توجد الحركة</option></select></label><span>إجمالي السجلات: {fmt(total)}</span></div>
+    {loading ? <div className="empty-state">جارٍ تحميل سجلات المطابقة…</div> : payments.length === 0 ? <div className="empty-state"><strong>لا توجد سجلات في هذه الصفحة</strong><p>عند رفع أي إيصال جديد يُنشأ سجل مطابقة تلقائيًا.</p></div> : <div className="table-scroll"><table className="applications-table finance-table"><thead><tr><th>الطالب</th><th>المبلغ المطلوب</th><th>المبلغ المدخل</th><th>حالة المطابقة</th><th>تاريخ رفع الإيصال</th><th>إجراء</th></tr></thead><tbody>{payments.map((payment) => <tr key={payment.application_id} className={selectedId === payment.application_id ? 'selected-row' : ''} onClick={() => choosePayment(payment)}><td><strong>{payment.application?.full_name || 'طلب غير موجود'}</strong><small>{payment.application?.tracking_code || payment.application_id}</small><small>{payment.application?.department || ''} · {payment.application?.specialization || ''}</small></td><td>{fmt(payment.expected_amount_syp)} ل.س</td><td>{payment.received_amount_syp == null ? '—' : `${fmt(payment.received_amount_syp)} ل.س`}</td><td><span className={`status-badge ${payment.reconciliation_status === 'matched' ? 'approved' : ['mismatch','suspected'].includes(payment.reconciliation_status) ? 'rejected' : 'pending'}`}>{({ unverified: 'بانتظار المطابقة', matched: 'مطابق', mismatch: 'اختلاف مبلغ', suspected: 'مشتبه به', not_found: 'لم توجد الحركة' })[payment.reconciliation_status] || payment.reconciliation_status}</span></td><td>{humanDate(payment.created_at)}</td><td><button type="button" className="secondary-button" onClick={(e) => { e.stopPropagation(); choosePayment(payment); if (payment.application?.receipt_path) openReceipt(payment); }}>عرض الفاتورة</button></td></tr>)}</tbody></table></div>}
+    <div className="pagination-row"><span>عرض {fmt(total ? offset + 1 : 0)}–{fmt(Math.min(offset + 50, total))} من {fmt(total)}</span><div><button className="secondary-button" disabled={offset <= 0 || loading} onClick={() => setOffset((v) => Math.max(0, v - 50))}>السابق</button><button className="secondary-button" disabled={offset + 50 >= total || loading} onClick={() => setOffset((v) => v + 50)}>التالي</button></div></div>
+    {selected && <form className="finance-review-form" onSubmit={saveReview}><div className="settings-header"><div><span className="section-index">مراجعة حركة مالية</span><h3>{selected.application?.full_name || selected.application_id}</h3><p>المبلغ المطلوب: <strong>{fmt(selected.expected_amount_syp)} ل.س</strong> · رمز التتبع: <code dir="ltr">{selected.application?.tracking_code}</code></p></div>{selected.application?.receipt_path && <button className="secondary-button" type="button" onClick={() => openReceipt(selected)}>فتح PDF في تبويب جديد</button>}</div>
+      <div className="settings-grid"><label className="field"><span>رقم/معرّف حركة شام كاش</span><input value={transactionRef} onChange={(e) => setTransactionRef(e.target.value.toUpperCase())} placeholder="المرجع الظاهر في تفاصيل التحويل" /></label><label className="field"><span>المبلغ الوارد فعليًا (ل.س)</span><input type="number" min="0" step="1" value={receivedAmount} onChange={(e) => setReceivedAmount(e.target.value)} /></label><label className="field"><span>تاريخ ووقت التحويل</span><input type="datetime-local" value={transferAt} onChange={(e) => setTransferAt(e.target.value)} /></label><label className="field"><span>ملاحظة المرسل/صاحب الحساب (اختياري)</span><input value={payerNote} onChange={(e) => setPayerNote(e.target.value)} maxLength={160} /></label><label className="field"><span>نتيجة الفحص</span><select value={outcome} onChange={(e) => setOutcome(e.target.value)}><option value="matched">مطابق مع الحركة الفعلية</option><option value="mismatch">المبلغ مختلف</option><option value="suspected">مشتبه به / فاتورة غير موثوقة</option><option value="not_found">لم أجد التحويل في الحساب</option><option value="unverified">إبقاءه دون حسم</option></select></label><label className="field field-full"><span>سبب/ملاحظات المراجعة المالية</span><textarea rows="3" value={verificationNotes} onChange={(e) => setVerificationNotes(e.target.value)} placeholder="مثلاً: وصل مزور، رقم مرجع مكرر، المبلغ ناقص…" /></label></div>
+      <label className="consent-check finance-confirm-check"><input type="checkbox" checked={checkedAgainstStatement} onChange={(e) => setCheckedAgainstStatement(e.target.checked)} /><span>أؤكد أنني راجعت الحركة في حساب شام كاش الفعلي أو كشف رسمي، وليس ملف PDF وحده.</span></label>
+      <div className="decision-actions"><button className="primary-button" disabled={busy}>{busy ? 'جارٍ الحفظ…' : 'حفظ نتيجة المطابقة'}</button><button className="secondary-button" type="button" onClick={() => setSelectedId('')}>إلغاء التحديد</button></div>
+    </form>}
+    <div className="form-divider" /><div className="notice notice-info"><strong>الإقفال اليومي</strong><p>تم نقل تسجيل الواردات والمقارنة مع كشف شام كاش والإقفال إلى «دفتر الواردات» أدناه حتى يتم احتساب الاستثناءات والمرجع المكرر على مستوى الحركات.</p></div>
+  </div>;
+  if (!standalone) return <><div className="finance-view-switch"><strong>١. مراجعة فواتير الطلبات</strong><span>—</span><strong>٢. دفتر الواردات والإقفال اليومي</strong></div>{shell}<FinancialLedgerPanel staffRole={staffRole} notify={notify} /></>;
+  return <section className="container inner-page finance-page"><div className="inner-hero"><span className="section-index">صلاحية المسؤول المالي</span><h1>الجرد المالي لحفلات التخرج</h1><p>طابق التحويلات الفعلية، سجّل كل حركة من كشف شام كاش، ثم أغلق اليوم بعد مطابقة العدد والإجمالي.</p></div>{shell}<FinancialLedgerPanel staffRole={staffRole} notify={notify} />{onSignOut && <button className="secondary-button full-width-button" onClick={onSignOut}>تسجيل الخروج</button>}</section>;
+}
+
+function AuditLogPanel({ notify }) {
+  const [rows, setRows] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [filter, setFilter] = useState('all');
+  const refresh = useCallback(async () => { setLoading(true); setError(''); const { data, error: queryError } = await supabase.from('admin_audit_logs').select('*').order('created_at', { ascending: false }).limit(300); if (queryError) { setError(queryError.message); notify('تعذر تحميل سجل التدقيق.', 'error'); } else setRows(data || []); setLoading(false); }, [notify]);
+  useEffect(() => { refresh(); }, [refresh]);
+  const shown = filter === 'all' ? rows : rows.filter((r) => r.action.includes(filter));
+  return <div className="panel settings-panel audit-log-panel"><div className="settings-header"><div><span className="section-index">المساءلة الإدارية</span><h2>سجل التدقيق الإداري</h2><p>يعرض الإجراءات التي تم تسجيلها في النظام. لا يستطيع الموظفون تعديل السجل مباشرة.</p></div><button className="secondary-button" onClick={refresh} disabled={loading}>تحديث ↻</button></div><div className="field"><span>تصفية السجل</span><select value={filter} onChange={(e) => setFilter(e.target.value)}><option value="all">جميع الإجراءات</option><option value="application_approved">الموافقة على طلب</option><option value="application_rejected">رفض طلب</option><option value="deleted">عمليات الحذف</option><option value="financial">عمليات مالية</option><option value="ticket_checked_in">تسجيل دخول عند البوابة</option><option value="backup">نسخ احتياطي</option><option value="staff_">إدارة حسابات الفريق</option></select></div>{loading ? <div className="empty-state">جارٍ تحميل السجل…</div> : error ? <div className="notice notice-warning">{error}</div> : shown.length === 0 ? <div className="empty-state">لا توجد أحداث مطابقة في آخر 300 سجل.</div> : <div className="table-scroll"><table className="applications-table audit-table"><thead><tr><th>التاريخ والوقت</th><th>المستخدم</th><th>الإجراء</th><th>الطلب/الكيان</th><th>التفاصيل</th></tr></thead><tbody>{shown.map((row) => <tr key={row.id}><td>{humanDate(row.created_at)}</td><td><strong>{row.actor_email}</strong><small>{row.actor_role || '—'}</small></td><td><code dir="ltr">{row.action}</code></td><td><strong>{row.tracking_code || row.entity_type}</strong><small>{row.entity_id || ''}</small></td><td><details><summary>عرض</summary><pre className="audit-detail-json">{JSON.stringify(row.details || {}, null, 2)}</pre></details></td></tr>)}</tbody></table></div>}<p className="form-footnote">يحفظ النظام حتى 300 حدثًا في هذه الشاشة للعرض؛ قاعدة البيانات تحتفظ بالسجل الكامل ما لم تحدد سياسة حذف لاحقًا.</p></div>;
+}
+
+function AdminBackupPanel({ notify }) {
+  const [busy, setBusy] = useState(false); const [progress, setProgress] = useState(''); const [pendingBackup, setPendingBackup] = useState(null); const [confirmedSaved, setConfirmedSaved] = useState(false); const [history, setHistory] = useState([]); const [historyError, setHistoryError] = useState('');
+  const tables = ['event_settings','academic_units','academic_specializations','applications','entry_tickets','financial_payments','financial_transactions','financial_daily_closings','admin_audit_logs','admin_backup_runs','staff_roles','staff_unit_permissions'];
+  const refreshHistory = useCallback(async () => { const { data, error } = await supabase.functions.invoke('admin-data-export', { body: { action: 'backup_history' } }); if (error || data?.error) setHistoryError(data?.error || error?.message || 'تعذر تحميل سجل النسخ.'); else { setHistory(data.runs || []); setHistoryError(''); } }, []);
+  useEffect(() => { refreshHistory(); }, [refreshHistory]);
+  async function downloadBackup() {
+    if (busy) return; setBusy(true); setProgress('بدء تصدير البيانات…'); setPendingBackup(null); setConfirmedSaved(false);
+    try {
+      const zip = new JSZip(); const counts = {}; const metadata = { app: 'latakia-graduation-registration', schema: '008', generated_at: new Date().toISOString(), note: 'نسخة بيانات من قاعدة البيانات؛ ملفات PDF المؤرشفة محليًا لا تُضمّن في هذا ZIP.' };
+      for (const table of tables) {
+        const rows = []; let offset = 0; let expected = null;
+        while (true) {
+          setProgress(`تصدير ${table} — تم تحميل ${rows.length}${expected == null ? '' : ` من ${expected}`}…`);
+          const { data, error } = await supabase.functions.invoke('admin-data-export', { body: { action: 'page', table, offset, limit: 1000 } });
+          if (error) { let body = null; try { if (error.context && typeof error.context.json === 'function') body = await error.context.json(); } catch {} throw new Error(body?.error || error.message); }
+          if (data?.error) throw new Error(data.error);
+          expected = Number(data.total || 0); rows.push(...(data.rows || [])); offset += (data.rows || []).length;
+          if (!data.rows || data.rows.length < 1000 || offset >= expected) break;
+        }
+        counts[table] = rows.length; zip.file(`${table}.json`, JSON.stringify(rows));
+      }
+      zip.file('backup-metadata.json', JSON.stringify({ ...metadata, row_counts: counts }, null, 2));
+      setProgress('ضغط الملفات وتجهيز ZIP…');
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+      const date = new Date(); const dateStr = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`; const fileName = `graduation-admin-backup-${dateStr}.zip`;
+      const objectUrl = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = objectUrl; link.download = fileName; document.body.appendChild(link); link.click(); link.remove(); window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+      setPendingBackup({ fileName, size: blob.size, counts }); setProgress('تم تجهيز تنزيل النسخة. تحقق من وجود الملف في مجلد التنزيلات قبل توثيق العملية.'); notify('بدأ تنزيل النسخة الاحتياطية. تحقق من حفظها خارج المتصفح قبل التأكيد.', 'success');
+    } catch (error) { setProgress(''); notify(error.message || 'فشل إنشاء النسخة الاحتياطية.', 'error'); }
+    finally { setBusy(false); }
+  }
+  async function confirmBackup() {
+    if (!pendingBackup || !confirmedSaved) return notify('ضع علامة التأكيد بعد التأكد من وجود ملف ZIP في التنزيلات.', 'error');
+    setBusy(true);
+    try { const { data, error } = await supabase.functions.invoke('admin-data-export', { body: { action: 'record_backup', confirmed_saved: true, file_name: pendingBackup.fileName, file_size_bytes: pendingBackup.size, row_counts: pendingBackup.counts } }); if (error || data?.error) throw new Error(data?.error || error?.message || 'تعذر تسجيل النسخ.'); notify('تم تسجيل عملية النسخ الاحتياطي في سجل الإدارة.', 'success'); setPendingBackup(null); setConfirmedSaved(false); await refreshHistory(); }
+    catch (error) { notify(error.message || 'تعذر تسجيل النسخ الاحتياطي.', 'error'); }
+    finally { setBusy(false); }
+  }
+  const lastBackup = history[0]?.created_at ? new Date(history[0].created_at) : null; const stale = !lastBackup || (Date.now() - lastBackup.getTime() > 24 * 60 * 60 * 1000);
+  return <div className="panel settings-panel admin-backup-panel"><div className="settings-header"><div><span className="section-index">حماية البيانات</span><h2>النسخ الاحتياطي الدوري</h2><p>صدّر نسخة من جداول الإدارة والطلبات والبطاقات والجرد والتدقيق إلى ملف ZIP لتنزيله وحفظه خارج الموقع.</p></div><span className={`status-badge ${stale ? 'rejected' : 'approved'}`}>{stale ? 'النسخة اليومية مطلوبة' : 'سُجلت نسخة خلال آخر 24 ساعة'}</span></div><div className="important-warning"><strong>تنبيه حول ما تتضمنه النسخة</strong><p>تتضمن النسخة بيانات قاعدة البيانات وجداول البطاقات والجرد وسجل التدقيق، لكنها لا تتضمن ملفات PDF المحفوظة محليًا على أجهزة الفريق. احتفظ بأرشيف الإيصالات المشفر في وسيطين مستقلين. لا يستطيع المتصفح تنزيل نسخة دوريًا عندما يكون مغلقًا؛ يجب أن يضغط المدير على إنشاء النسخة كل يوم.</p></div><button className="primary-button" onClick={downloadBackup} disabled={busy}>{busy ? 'جارٍ إعداد النسخة…' : 'إنشاء وتنزيل نسخة احتياطية كاملة (ZIP)'}</button>{progress && <div className="notice notice-info" role="status">{progress}</div>}{pendingBackup && <div className="backup-confirm-box"><strong>تم إعداد الملف: {pendingBackup.fileName}</strong><p>الحجم: {fmt(pendingBackup.size)} بايت. الأعداد: {Object.entries(pendingBackup.counts).map(([k,v]) => `${k}: ${fmt(v)}`).join(' · ')}</p><label className="consent-check"><input type="checkbox" checked={confirmedSaved} onChange={(e) => setConfirmedSaved(e.target.checked)} /><span>تحققت أن ملف ZIP موجود في التنزيلات، واحتفظت بنسخة مستقلة أخرى.</span></label><button className="secondary-button" disabled={busy || !confirmedSaved} onClick={confirmBackup}>تأكيد الحفظ وتسجيله في سجل الإدارة</button></div>}<div className="daily-closing-history"><h3>سجل النسخ السابقة</h3>{historyError && <div className="notice notice-warning">{historyError}</div>}{history.length === 0 ? <p className="muted-line">لا توجد نسخ احتياطية موثقة بعد.</p> : <div className="table-scroll"><table className="applications-table"><thead><tr><th>التاريخ</th><th>المستخدم</th><th>الملف</th><th>الحجم</th><th>عدد السجلات</th></tr></thead><tbody>{history.map((item) => <tr key={item.id}><td>{humanDate(item.created_at)}</td><td>{item.actor_email}</td><td>{item.file_name}</td><td>{fmt(item.file_size_bytes || 0)} بايت</td><td>{Object.entries(item.row_counts || {}).map(([key,value]) => `${key}: ${fmt(value)}`).join(' · ')}</td></tr>)}</tbody></table></div>}</div></div>;
 }
 
 function StaffManagementPanel({ staffUser, catalog, notify }) {
@@ -690,16 +950,16 @@ function StaffManagementPanel({ staffUser, catalog, notify }) {
     {credentials && <div className="temporary-credential-box"><strong>كلمة المرور المؤقتة للحساب: {credentials.email}</strong><p>تُعرض هنا بعد الإنشاء أو إعادة التعيين فقط. انسخها واحفظها في مكان آمن؛ لن نخزنها أو نعرضها ثانية.</p><code dir="ltr">{credentials.password}</code><button type="button" className="secondary-button" onClick={copyPassword}>نسخ كلمة المرور</button><button type="button" className="text-delete" onClick={() => setCredentials(null)}>إخفاء</button></div>}
     <form className="staff-create-form" onSubmit={createStaff}>
       <h3>إنشاء حساب جديد</h3>
-      <div className="staff-form-grid"><label className="field"><span>البريد الإلكتروني</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="off" placeholder="reviewer@example.com" /></label><label className="field"><span>الدور</span><select value={newRole} onChange={(e) => setNewRole(e.target.value)}><option value="reviewer">مراجع / عضو فريق</option><option value="admin">مدير آخر</option></select></label></div>
+      <div className="staff-form-grid"><label className="field"><span>البريد الإلكتروني</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="off" placeholder="reviewer@example.com" /></label><label className="field"><span>الدور</span><select value={newRole} onChange={(e) => setNewRole(e.target.value)}><option value="reviewer">مراجع طلبات (حسب الكلية/الاختصاص)</option><option value="finance">مسؤول مالي (مطابقة وإقفال)</option><option value="gate">موظف بوابة (مسح QR وتسجيل الدخول)</option><option value="admin">مدير آخر</option></select></label></div>
       {newRole === 'reviewer' && <><div className="field"><span>الكليات والاختصاصات التي يمكنه الوصول إليها</span>{renderScopePicker(newScopes, setNewScopes, 'create')}</div><small className="muted-line">إن اخترت الكلية كاملة، فلا حاجة إلى اختيار اختصاصاتها منفردة. يمكن تحديد عدة جهات واختصاصات.</small></>}
       <button className="primary-button" disabled={busy || loading}><span>{busy ? 'جارٍ التنفيذ…' : 'إنشاء حساب وإصدار كلمة مرور مؤقتة'}</span></button>
     </form>
     <div className="staff-list-heading"><h3>أعضاء الفريق الحاليون</h3><span>{members.length} حساب</span></div>
     {loading ? <div className="empty-state">جارٍ تحميل حسابات الفريق…</div> : members.length === 0 ? <div className="empty-state">لا توجد حسابات فريق في نتيجة الاستعلام.</div> : <div className="staff-member-list">{members.map((member) => <article className="staff-member-card" key={member.user_id}>
-      <div className="staff-member-head"><div><strong>{member.email || member.user_id}</strong><span className={`status-badge ${member.role === 'admin' ? 'approved' : 'pending'}`}>{member.role === 'admin' ? 'مدير' : 'مراجع'}</span></div><small>{member.user_id === staffUser.id ? 'حسابك الحالي' : `أُنشئ في ${humanDate(member.created_at)}`}</small></div>
-      <p className="staff-scope-summary">{member.role === 'admin' ? 'صلاحية كاملة على المنصة.' : scopeLabels(member.assignments)}</p>
+      <div className="staff-member-head"><div><strong>{member.email || member.user_id}</strong><span className={`status-badge ${member.role === 'admin' ? 'approved' : 'pending'}`}>{{ admin: 'مدير', reviewer: 'مراجع', finance: 'مسؤول مالي', gate: 'موظف بوابة' }[member.role] || member.role}</span></div><small>{member.user_id === staffUser.id ? 'حسابك الحالي' : `أُنشئ في ${humanDate(member.created_at)}`}</small></div>
+      <p className="staff-scope-summary">{member.role === 'admin' ? 'صلاحية كاملة على المنصة.' : member.role === 'finance' ? 'مطابقة التحويلات الفعلية وإقفال اليوم المالي؛ لا يمكنه تعديل الطلبات.' : member.role === 'gate' ? 'مسح QR وتسجيل دخول البطاقة مرة واحدة؛ لا يمكنه مراجعة الفواتير.' : scopeLabels(member.assignments)}</p>
       <div className="staff-member-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => startEdit(member)}>تعديل الدور والصلاحيات</button><button type="button" className="secondary-button" disabled={busy} onClick={() => resetPassword(member)}>إعادة تعيين كلمة المرور</button>{member.user_id !== staffUser.id && <button type="button" className="reject-button" disabled={busy} onClick={() => removeStaff(member)}>حذف الحساب</button>}</div>
-      {editor?.user_id === member.user_id && <div className="staff-editor"><h4>تعديل صلاحيات {member.email}</h4><label className="field"><span>الدور</span><select value={editor.role} onChange={(e) => setEditor((old) => ({ ...old, role: e.target.value }))}><option value="reviewer">مراجع / عضو فريق</option><option value="admin">مدير</option></select></label>{editor.role === 'reviewer' && <div className="field"><span>نطاق الوصول</span>{renderScopePicker(editor.scopes, (updater) => setEditor((old) => ({ ...old, scopes: typeof updater === 'function' ? updater(old.scopes) : updater })), `edit-${member.user_id}`)}</div>}<div className="staff-member-actions"><button type="button" className="primary-button" disabled={busy} onClick={saveEdit}>حفظ الصلاحيات</button><button type="button" className="secondary-button" disabled={busy} onClick={() => setEditor(null)}>إلغاء</button></div></div>}
+      {editor?.user_id === member.user_id && <div className="staff-editor"><h4>تعديل صلاحيات {member.email}</h4><label className="field"><span>الدور</span><select value={editor.role} onChange={(e) => setEditor((old) => ({ ...old, role: e.target.value }))}><option value="reviewer">مراجع طلبات</option><option value="finance">مسؤول مالي</option><option value="gate">موظف بوابة</option><option value="admin">مدير</option></select></label>{editor.role === 'reviewer' && <div className="field"><span>نطاق الوصول</span>{renderScopePicker(editor.scopes, (updater) => setEditor((old) => ({ ...old, scopes: typeof updater === 'function' ? updater(old.scopes) : updater })), `edit-${member.user_id}`)}</div>}<div className="staff-member-actions"><button type="button" className="primary-button" disabled={busy} onClick={saveEdit}>حفظ الصلاحيات</button><button type="button" className="secondary-button" disabled={busy} onClick={() => setEditor(null)}>إلغاء</button></div></div>}
     </article>)}</div>}
   </div>;
 }
@@ -739,7 +999,7 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
   const isAdmin = staffRole === 'admin';
 
   useEffect(() => setLocalSettings({ ...DEFAULT_SETTINGS, ...settings, payment_images: Array.isArray(settings.payment_images) ? settings.payment_images : [] }), [settings]);
-  useEffect(() => { if (!isAdmin && (tab === 'settings' || tab === 'academic' || tab === 'team')) setTab('applications'); }, [isAdmin, tab]);
+  useEffect(() => { if (!isAdmin && ['settings', 'academic', 'team', 'audit', 'finance', 'backup', 'gate'].includes(tab)) setTab('applications'); }, [isAdmin, tab]);
   useEffect(() => {
     setUnitCapacityDrafts(Object.fromEntries((catalog.units || []).map((unit) => [unit.id, unit.registration_capacity == null ? '' : String(unit.registration_capacity)])));
   }, [catalog.units]);
@@ -1113,7 +1373,7 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
   const specs = catalog.specializations || [];
   return <section className="container admin-page">
     <div className="admin-welcome"><div><span className="section-index">لوحة إدارة التسجيل</span><h1>مرحباً بفريق التنظيم</h1><p>راجع الطلبات، تحقق من الفواتير، واضبط خيارات التسجيل بحسب الكليات والمعاهد.</p></div><button className="secondary-button" onClick={onSignOut}>تسجيل الخروج ↗</button></div>
-    <div className="admin-tabs"><button className={tab === 'applications' ? 'active' : ''} onClick={() => setTab('applications')}>الطلبات <span>{counts.pending}</span></button>{isAdmin && <><button className={tab === 'team' ? 'active' : ''} onClick={() => setTab('team')}>فريق التنظيم</button><button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>الرسوم والدفع</button><button className={tab === 'academic' ? 'active' : ''} onClick={() => setTab('academic')}>الكليات والاختصاصات</button></>}</div>
+    <div className="admin-tabs"><button className={tab === 'applications' ? 'active' : ''} onClick={() => setTab('applications')}>الطلبات <span>{counts.pending}</span></button>{isAdmin && <><button className={tab === 'gate' ? 'active' : ''} onClick={() => setTab('gate')}>بوابة الدخول</button><button className={tab === 'finance' ? 'active' : ''} onClick={() => setTab('finance')}>الجرد المالي</button><button className={tab === 'audit' ? 'active' : ''} onClick={() => setTab('audit')}>سجل التدقيق</button><button className={tab === 'backup' ? 'active' : ''} onClick={() => setTab('backup')}>النسخ الاحتياطي</button><button className={tab === 'team' ? 'active' : ''} onClick={() => setTab('team')}>فريق التنظيم</button><button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>الرسوم والدفع</button><button className={tab === 'academic' ? 'active' : ''} onClick={() => setTab('academic')}>الكليات والاختصاصات</button></>}</div>
     {tab === 'applications' && <>
       <div className="stats-grid admin-stats-five"><div className="stat-card"><span>إجمالي النتائج المطابقة</span><strong>{fmt(counts.all)}</strong><small>بحسب الفلاتر الحالية</small></div><div className="stat-card stat-pending"><span>بانتظار الفاتورة</span><strong>{fmt(counts.awaiting_payment)}</strong><small>في الصفحة المعروضة</small></div><div className="stat-card stat-pending"><span>قيد التدقيق</span><strong>{fmt(counts.pending)}</strong><small>في الصفحة المعروضة</small></div><div className="stat-card stat-approved"><span>تمت الموافقة</span><strong>{fmt(counts.approved)}</strong><small>في الصفحة المعروضة</small></div><div className="stat-card stat-rejected"><span>مرفوضة</span><strong>{fmt(counts.rejected)}</strong><small>في الصفحة المعروضة</small></div></div>
       <div className="panel applications-panel">
@@ -1212,7 +1472,11 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
       {units.length === 0 ? <div className="empty-state"><strong>لم تتم إضافة كليات أو معاهد بعد</strong><p>أضف الجهات التي تريد إتاحة التسجيل فيها، ثم أضف الاختصاصات إن وجدت.</p></div> : <div className="academic-units-list">{units.map((unit) => { const unitSpecs = specs.filter((spec) => spec.unit_id === unit.id); return <article className="academic-unit-card" key={unit.id}><div className="academic-unit-top"><div><span className="academic-unit-type">{unit.unit_type === 'institute' ? 'معهد' : 'كلية'}</span><h3>{unit.name}</h3><small>{unitSpecs.length} اختصاص مسجل · {fmt(unit.registered_count || 0)} مقعد محجوز (الخريج والمرافقون) {unit.registration_capacity ? `من ${fmt(unit.registration_capacity)}` : 'دون حد أعلى'}</small>{unit.capacity_reached && <span className="capacity-reached-badge">اكتملت السعة وأُغلق التسجيل تلقائيًا</span>}</div><label className="catalog-toggle"><input type="checkbox" checked={Boolean(unit.is_open)} disabled={Boolean(unit.capacity_reached)} onChange={(e) => toggleUnit(unit, e.target.checked)} /><span>{unit.capacity_reached ? 'مغلق لاكتمال السعة' : unit.is_open ? 'التسجيل مفتوح' : 'التسجيل متوقف'}</span></label><button type="button" className="reject-button catalog-delete" onClick={() => deleteUnit(unit)}>حذف</button></div><div className="unit-capacity-editor"><label className="field"><span>الحد الأقصى للحضور لهذه الجهة (الخريجون + المرافقون)</span><input type="number" min="1" max="1000000" step="1" value={unitCapacityDrafts[unit.id] ?? ''} onChange={(e) => setUnitCapacityDrafts((old) => ({ ...old, [unit.id]: e.target.value }))} placeholder="اتركه فارغًا دون حد" /></label><button type="button" className="secondary-button" onClick={() => saveUnitCapacity(unit)}>حفظ الحد</button><small>يحتسب كل خريج مع عدد مرافقيه في الطلبات غير المرفوضة، بما فيها بانتظار الدفع وقيد التدقيق والمقبولة. لا يحتسب الطلبات المرفوضة أو المحذوفة. يغلق التسجيل تلقائيًا عند بلوغ الحد.</small></div><div className="academic-specializations">{unitSpecs.length === 0 ? <p className="no-specs-admin">لم تتم إضافة اختصاصات لهذه الجهة؛ سيظهر للطالب «لا يوجد اختصاص».</p> : unitSpecs.map((spec) => <div className="specialization-row" key={spec.id}><span>{spec.name}</span><label className="catalog-toggle"><input type="checkbox" checked={Boolean(spec.is_open)} disabled={!unit.is_open} onChange={(e) => toggleSpecialization(spec, e.target.checked)} /><span>{spec.is_open ? 'مفتوح' : 'مغلق'}</span></label><button type="button" className="text-delete" onClick={() => deleteSpecialization(spec)}>حذف</button></div>)}</div></article>; })}</div>}
       <div className="specialization-add-box"><h3>إضافة اختصاص إلى كلية أو معهد</h3><form className="catalog-add-form" onSubmit={addSpecialization}><label className="field"><span>الكلية أو المعهد</span><select value={specializationTargetUnit} onChange={(e) => setSpecializationTargetUnit(e.target.value)} required><option value="">اختر الجهة</option>{units.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></label><label className="field"><span>اسم الاختصاص</span><input value={newSpecializationName} onChange={(e) => setNewSpecializationName(e.target.value)} placeholder="مثال: هندسة البرمجيات" required /></label><button className="primary-button" type="submit" disabled={units.length === 0}><span>إضافة الاختصاص</span></button></form></div>
     </div>}
-    <div className="admin-footnote">مسجل الدخول: <strong>{staffUser.email}</strong> <span>•</span> صلاحية الحساب: <strong>{isAdmin ? 'مدير' : 'مراجع'}</strong> <span>•</span> لا تشارك بيانات دخول الفريق مع الطلاب.</div>
+    {tab === 'gate' && isAdmin && <GateOperationsPanel staffUser={staffUser} staffRole={staffRole} notify={notify} embedded />}
+    {tab === 'finance' && isAdmin && <FinancialDashboard staffRole={staffRole} notify={notify} embedded />}
+    {tab === 'audit' && isAdmin && <AuditLogPanel notify={notify} />}
+    {tab === 'backup' && isAdmin && <AdminBackupPanel notify={notify} />}
+    <div className="admin-footnote">مسجل الدخول: <strong>{staffUser.email}</strong> <span>•</span> صلاحية الحساب: <strong>{{ admin: 'مدير', reviewer: 'مراجع', finance: 'مسؤول مالي', gate: 'موظف بوابة' }[staffRole] || staffRole}</strong> <span>•</span> لا تشارك بيانات دخول الفريق مع الطلاب.</div>
   </section>;
 }
 

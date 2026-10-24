@@ -15,7 +15,7 @@ Deno.serve(async (request) => {
   let body: { application_id?: string; confirm?: boolean }; try { body = await request.json(); } catch { return json({ error: 'بيانات الطلب غير صالحة.' }, 400); }
   if (body.confirm !== true) return json({ error: 'يلزم تأكيد الحذف النهائي.' }, 400);
   const id = String(body.application_id || ''); if (!id) return json({ error: 'معرّف الطلب مطلوب.' }, 400);
-  const { data: app, error } = await admin.from('applications').select('id,tracking_code,receipt_path').eq('id', id).maybeSingle();
+  const { data: app, error } = await admin.from('applications').select('id,tracking_code,receipt_path,full_name,status,department,specialization,amount_syp').eq('id', id).maybeSingle();
   if (error) return json({ error: 'تعذر تحميل الطلب.' }, 500); if (!app) return json({ error: 'الطلب غير موجود.' }, 404);
   if (app.receipt_path) {
     const { error: removeError } = await admin.storage.from('receipts').remove([app.receipt_path]);
@@ -23,5 +23,7 @@ Deno.serve(async (request) => {
   }
   const { error: deleteError } = await admin.from('applications').delete().eq('id', id);
   if (deleteError) return json({ error: 'تعذر حذف سجل الطالب: ' + deleteError.message }, 500);
+  const { error: auditError } = await admin.from('admin_audit_logs').insert({ actor_user_id: auth.user.id, actor_email: auth.user.email || 'unknown', actor_role: 'admin', action: 'application_permanently_deleted', entity_type: 'application', entity_id: app.id, tracking_code: app.tracking_code, details: { full_name: app.full_name, previous_status: app.status, department: app.department, specialization: app.specialization, amount_syp: app.amount_syp, receipt_path_removed: Boolean(app.receipt_path) } });
+  if (auditError) console.error('audit insert failed', auditError.message);
   return json({ ok: true, tracking_code: app.tracking_code, message: 'حذف سجل الطالب والملفات السحابية المرتبطة به. أي نسخة أرشيفية على أجهزة الفريق تبقى خارج سيطرة الموقع، ويجب حذفها يدويًا حسب سياسة الاحتفاظ.' });
 });

@@ -39,6 +39,14 @@ Deno.serve(async (request) => {
   let body: Record<string, unknown>;
   try { body = await request.json(); } catch { return json({ error: 'محتوى الطلب غير صالح.' }, 400); }
   const action = String(body.action || '');
+  const auditStaffAction = async (actionName: string, targetId: string, targetEmail: string, details: Record<string, unknown> = {}) => {
+    const { error } = await admin.from('admin_audit_logs').insert({ actor_user_id: actor.id, actor_email: actor.email || 'unknown', actor_role: actorRole?.role || 'admin', action: actionName, entity_type: 'staff_account', entity_id: targetId, details: { target_email: targetEmail, ...details } });
+    if (error) console.error('staff audit insert failed', error.message);
+  };
+  const normalizeRole = (value: unknown): 'admin' | 'reviewer' | 'finance' | 'gate' => {
+    const allowed = ['admin', 'reviewer', 'finance', 'gate'];
+    return allowed.includes(String(value)) ? String(value) as 'admin' | 'reviewer' | 'finance' | 'gate' : 'reviewer';
+  };
 
   // Any authenticated staff member may clear the protected one-time-password flag only for themselves.
   if (action === 'complete_password_change') {
@@ -102,7 +110,7 @@ Deno.serve(async (request) => {
 
     if (action === 'create') {
       const email = String(body.email || '').trim().toLowerCase();
-      const role = body.role === 'admin' ? 'admin' : 'reviewer';
+      const role = normalizeRole(body.role);
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return json({ error: 'أدخل بريدًا إلكترونيًا صحيحًا.' }, 400);
       const assignments = role === 'reviewer' ? await validateAssignments(body.assignments || []) : [];
       if (role === 'reviewer' && assignments.length === 0) return json({ error: 'يجب تحديد كلية أو اختصاص واحد على الأقل للمراجع.' }, 400);
@@ -113,12 +121,13 @@ Deno.serve(async (request) => {
       if (roleError) { await admin.auth.admin.deleteUser(newUser.user.id); return json({ error: 'تعذر إسناد الدور إلى الحساب: ' + roleError.message }, 500); }
       try { await replaceAssignments(newUser.user.id, assignments); }
       catch (error) { await admin.auth.admin.deleteUser(newUser.user.id); throw error; }
+      await auditStaffAction('staff_created', newUser.user.id, email, { role, assignment_count: assignments.length });
       return json({ ok: true, user_id: newUser.user.id, email, role, temporary_password: temporaryPassword }, 201);
     }
 
     if (action === 'update') {
       const staffId = String(body.staff_id || '');
-      const role = body.role === 'admin' ? 'admin' : 'reviewer';
+      const role = normalizeRole(body.role);
       if (!staffId) return json({ error: 'معرّف حساب الفريق مطلوب.' }, 400);
       if (staffId === actor.id && role !== 'admin') return json({ error: 'لا يمكنك خفض صلاحية حساب المدير الذي تستخدمه الآن.' }, 400);
       const { data: current, error: currentError } = await admin.from('staff_roles').select('user_id,role').eq('user_id', staffId).maybeSingle();
@@ -132,6 +141,8 @@ Deno.serve(async (request) => {
       const { error: roleError } = await admin.from('staff_roles').update({ role }).eq('user_id', staffId);
       if (roleError) throw new Error(roleError.message);
       await replaceAssignments(staffId, assignments);
+      const { data: updatedUser } = await admin.auth.admin.getUserById(staffId);
+      await auditStaffAction('staff_role_or_scope_updated', staffId, updatedUser.user?.email || staffId, { role, assignment_count: assignments.length });
       return json({ ok: true });
     }
 
@@ -144,6 +155,8 @@ Deno.serve(async (request) => {
         const { count } = await admin.from('staff_roles').select('user_id', { count: 'exact', head: true }).eq('role', 'admin');
         if ((count || 0) <= 1) return json({ error: 'لا يمكن حذف آخر مدير في المنصة.' }, 400);
       }
+      const { data: targetUser } = await admin.auth.admin.getUserById(staffId);
+      await auditStaffAction('staff_account_deleted', staffId, targetUser.user?.email || staffId, { previous_role: target.role });
       const { error } = await admin.auth.admin.deleteUser(staffId);
       if (error) throw new Error(error.message);
       return json({ ok: true });
@@ -158,6 +171,8 @@ Deno.serve(async (request) => {
       const temporaryPassword = makeTemporaryPassword();
       const { error } = await admin.auth.admin.updateUserById(staffId, { password: temporaryPassword, app_metadata: { ...(existingUser.user.app_metadata || {}), must_change_password: true } });
       if (error) throw new Error(error.message);
+      const { data: targetUser } = await admin.auth.admin.getUserById(staffId);
+      await auditStaffAction('staff_password_reset', staffId, targetUser.user?.email || staffId, {});
       return json({ ok: true, temporary_password: temporaryPassword });
     }
 

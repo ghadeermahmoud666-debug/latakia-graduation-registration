@@ -57,5 +57,7 @@ Deno.serve(async (request) => {
   }
   const { error: updateError } = await admin.from('applications').update({ receipt_path: null }).eq('id', id).eq('status', 'rejected');
   if (updateError) return json({ error: 'حذفت الفاتورة السحابية لكن تعذر تحديث مسارها في سجل الطلب. احتفظ بالأرشيف وأعد المحاولة: ' + updateError.message }, 500);
+  const { error: auditError } = await admin.from('admin_audit_logs').insert({ actor_user_id: auth.user.id, actor_email: auth.user.email || 'unknown', actor_role: 'admin', action: 'rejected_receipt_deleted', entity_type: 'application', entity_id: id, tracking_code: (await admin.from('applications').select('tracking_code').eq('id', id).maybeSingle()).data?.tracking_code || null, details: { archive_path: archivePath, archive_sha256: archiveHash, receipt_sha256: receiptHash, archive_file_name: fileName } });
+  if (auditError) console.error('audit insert failed', auditError.message);
   return json({ ok: true, message: 'حُذفت الفاتورة من السحابة بعد التحقق من بصمتها وحفظ بيانات الأرشيف. بقي سجل الطالب.' });
 });

@@ -65,6 +65,11 @@ Deno.serve(async (request) => {
     if (!allowed) return json({ error: 'هذا الطلب خارج نطاق الكليات أو الاختصاصات المسموح لك بمراجعتها.' }, 403);
   }
   if (application.status !== 'pending') return json({ error: 'لا يمكن الموافقة إلا على طلب قيد التدقيق بعد رفع الفاتورة.' }, 409);
+  const { data: financialRecord, error: financialError } = await admin.from('financial_payments').select('reconciliation_status,checked_against_statement,received_amount_syp,transaction_reference,transfer_at').eq('application_id', appId).maybeSingle();
+  if (financialError) return json({ error: 'تعذر قراءة المطابقة المالية. لم تتم الموافقة أو حذف الفاتورة.' }, 500);
+  if (!financialRecord || financialRecord.reconciliation_status !== 'matched' || financialRecord.checked_against_statement !== true || Number(financialRecord.received_amount_syp) <= 0 && Number(financialRecord.received_amount_syp) !== 0 || Number(financialRecord.received_amount_syp) < 0 || !financialRecord.transaction_reference || !financialRecord.transfer_at) return json({ error: 'يجب أن يطابق المسؤول المالي الحركة الفعلية في شام كاش ورقمها ومبلغها قبل الموافقة. لم تُحذف الفاتورة.' }, 409);
+  const { data: amountRow } = await admin.from('applications').select('amount_syp').eq('id', appId).maybeSingle();
+  if (!amountRow || Number(financialRecord.received_amount_syp) !== Number(amountRow.amount_syp)) return json({ error: 'المبلغ المستلم لا يطابق المبلغ المطلوب؛ لا يمكن الموافقة.' }, 409);
 
   // Verify the original cloud receipt hash before deleting it. On a retry after object removal,
   // accept only matching archive metadata written by this endpoint during a previous attempt.
@@ -119,5 +124,7 @@ Deno.serve(async (request) => {
     receipt_archive_saved_by: actor.id,
   }).eq('id', appId).eq('status', 'pending').select('id,tracking_code').maybeSingle();
   if (approveError || !approved) return json({ error: 'حُفظ الأرشيف والتحقق من الوصل، لكن لم يتسنَّ إنهاء الموافقة في قاعدة البيانات. أعد المحاولة؛ لن يُحذف الأرشيف المحلي.' }, 500);
-  return json({ ok: true, status: 'approved', tracking_code: approved.tracking_code, receipt_removed_from_cloud: true, message: 'تمت الموافقة بعد التحقق من بصمة الفاتورة وتسجيل بيانات الأرشيف.' });
+  const { error: auditError } = await admin.from('admin_audit_logs').insert({ actor_user_id: actor.id, actor_email: actor.email || 'unknown', actor_role: role.role, action: 'application_approved_and_receipt_archived', entity_type: 'application', entity_id: approved.id, tracking_code: approved.tracking_code, details: { receipt_removed_from_cloud: true, archive_file_name: fileName, archive_relative_path: body.archive_relative_path, archive_sha256: body.archive_sha256, receipt_sha256: body.receipt_sha256, financial_transaction_reference: financialRecord.transaction_reference, amount_syp: amountRow?.amount_syp } });
+  if (auditError) console.error('audit insert failed', auditError.message);
+  return json({ ok: true, status: 'approved', tracking_code: approved.tracking_code, receipt_removed_from_cloud: true, message: 'تمت الموافقة بعد التحقق من بصمة الفاتورة ومطابقة التحويل وتسجيل بيانات الأرشيف.' });
 });

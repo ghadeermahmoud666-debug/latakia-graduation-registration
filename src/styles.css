@@ -602,3 +602,39 @@ body{background:#fbf5e9;color:#41423b}
   .filter-error-state .secondary-button { width: 100%; align-self: stretch; }
 }
 @media (prefers-reduced-motion: reduce) { .filter-spinner { animation: none; } }
+
+/* المرحلة التاسعة: سجل التدقيق، ماسح البوابة، دفتر الواردات والإقفال اليومي */
+.financial-ledger-panel{margin-top:22px;overflow:hidden}
+.finance-view-switch{display:flex;align-items:center;gap:10px;margin:16px 0 8px;padding:12px 15px;border:1px solid var(--line,#e5e0d6);border-radius:14px;background:var(--surface,#fff);color:var(--ink,#202720);font-size:.9rem}
+.finance-view-switch span{color:var(--muted,#777)}
+.daily-ledger-date{display:flex;align-items:end;justify-content:space-between;gap:16px;margin:18px 0;padding:14px;border-radius:14px;background:var(--surface-soft,#f7f5f0)}
+.daily-ledger-date .field{margin:0;min-width:min(100%,260px)}
+.ledger-stats{margin:12px 0 22px}
+.ledger-entry-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-top:18px}
+.ledger-entry-grid>.subpanel{min-width:0;padding:18px;border:1px solid var(--line,#e7e2d7);border-radius:16px;background:var(--surface,#fff)}
+.ledger-entry-grid>.subpanel h3,.ledger-result-box h3,.ledger-recent h3{margin:0 0 8px}
+.ledger-entry-grid>.subpanel>p{color:var(--muted,#686c67);line-height:1.8;font-size:.92rem}
+.ledger-result-box,.ledger-recent{margin-top:20px;padding:18px;border:1px solid var(--line,#e7e2d7);border-radius:16px;background:var(--surface,#fff)}
+.ledger-result-counts{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 16px}
+.ledger-result-counts span{padding:7px 10px;border-radius:9px;background:var(--surface-soft,#f7f5f0);font-size:.86rem}
+.daily-close-section{margin-top:22px;padding:18px;border:1px solid var(--line,#e7e2d7);border-radius:16px;background:var(--surface-soft,#fbfaf7)}
+.daily-close-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:14px}
+.daily-close-form .field-full{grid-column:1/-1}
+.daily-closing-history{margin-top:20px}
+.financial-ledger-panel .code-line{direction:ltr;text-align:left;overflow-wrap:anywhere;background:var(--surface-soft,#f7f5f0);padding:9px;border-radius:8px}
+.financial-ledger-panel input,.financial-ledger-panel select,.financial-ledger-panel textarea{max-width:100%;min-width:0}
+.gate-scan-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.audit-detail-json{max-width:min(55vw,520px);max-height:260px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;direction:ltr;text-align:left;background:var(--surface-soft,#f7f5f0);padding:10px;border-radius:8px}
+@media(max-width:760px){
+  .finance-view-switch{align-items:flex-start;flex-direction:column;gap:4px;font-size:.85rem}
+  .daily-ledger-date{align-items:stretch;flex-direction:column}
+  .daily-ledger-date .field{min-width:0;width:100%}
+  .ledger-entry-grid,.daily-close-form,.gate-scan-layout{grid-template-columns:minmax(0,1fr)}
+  .daily-close-form .field-full{grid-column:auto}
+  .ledger-entry-grid>.subpanel,.ledger-result-box,.ledger-recent,.daily-close-section{padding:14px}
+  .ledger-result-counts{display:grid;grid-template-columns:minmax(0,1fr)}
+  .financial-ledger-panel .settings-header{align-items:flex-start;flex-direction:column}
+  .financial-ledger-panel .settings-header .secondary-button{width:100%}
+  .financial-ledger-panel .table-scroll table{min-width:700px}
+  .audit-detail-json{max-width:74vw}
+}

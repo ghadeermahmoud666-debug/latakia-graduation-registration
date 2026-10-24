@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
     "archive:receipts": "node scripts/archive-receipts.mjs",
-    "restore:receipt": "node scripts/restore-archived-receipt.mjs"
+    "restore:receipt": "node scripts/restore-archived-receipt.mjs",
+    "restore:backup": "node scripts/restore-admin-backup.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
@@ -16,7 +17,8 @@
     "react-dom": "^19.1.1",
     "qrcode": "^1.5.4",
     "pdf-lib": "^1.17.1",
-    "jszip": "^3.10.1"
+    "jszip": "^3.10.1",
+    "@zxing/browser": "^0.1.5"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^5.0.2",

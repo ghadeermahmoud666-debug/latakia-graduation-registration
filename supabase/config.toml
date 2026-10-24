@@ -25,3 +25,15 @@ verify_jwt = true
 
 [functions.delete-application]
 verify_jwt = true
+
+[functions.check-in-ticket]
+verify_jwt = true
+
+[functions.financial-management]
+verify_jwt = true
+
+[functions.admin-data-export]
+verify_jwt = true
+
+[functions.financial-control]
+verify_jwt = true
