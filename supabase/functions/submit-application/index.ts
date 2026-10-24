@@ -42,9 +42,11 @@ Deno.serve(async (request) => {
     if (carriedSubjects > Number(settings.max_carried_subjects ?? 5)) return json({ error: `الحد الأقصى للمواد المحمولة هو ${settings.max_carried_subjects}.` }, 400);
     if (companions > Number(settings.max_companions)) return json({ error: `الحد الأقصى للمرافقين هو ${settings.max_companions}.` }, 400);
 
-    const { data: unit, error: unitError } = await admin.from('academic_units').select('id, name, unit_type, is_open').eq('id', unitId).maybeSingle();
+    const { data: unit, error: unitError } = await admin.from('academic_units').select('id, name, unit_type, is_open, registration_capacity, registered_count, capacity_reached').eq('id', unitId).maybeSingle();
     if (unitError) return json({ error: 'تعذر التحقق من الكلية أو المعهد.' }, 500);
-    if (!unit || !unit.is_open) return json({ error: 'التسجيل مغلق لهذه الكلية أو المعهد.' }, 403);
+    if (!unit) return json({ error: 'الكلية أو المعهد غير موجود.' }, 404);
+    if (unit.capacity_reached || (unit.registration_capacity != null && Number(unit.registered_count || 0) + 1 + companions > Number(unit.registration_capacity))) return json({ error: 'لا تكفي السعة المتبقية لاستقبال الخريج وعدد المرافقين الذي اخترته، أو اكتمل العدد المحدد. قلل عدد المرافقين أو اختر جهة أخرى.' }, 409);
+    if (!unit.is_open) return json({ error: 'التسجيل مغلق لهذه الكلية أو المعهد.' }, 403);
 
     const { data: allSpecs, error: specsError } = await admin.from('academic_specializations').select('id, name, is_open').eq('unit_id', unit.id);
     if (specsError) return json({ error: 'تعذر التحقق من الاختصاصات.' }, 500);
@@ -84,6 +86,8 @@ Deno.serve(async (request) => {
     });
     if (insertError) {
       console.error('create application failed', insertError.message);
+      if (insertError.message.includes('REGISTRATION_CAPACITY_REACHED')) return json({ error: 'اكتمل العدد المحدد لهذه الكلية أو المعهد. اختر جهة أخرى مفتوحًا التسجيل فيها.' }, 409);
+      if (insertError.message.includes('REGISTRATION_CLOSED')) return json({ error: 'أُغلق التسجيل لهذه الكلية أو المعهد. اختر جهة أخرى مفتوحًا التسجيل فيها.' }, 403);
       return json({ error: 'تعذر حفظ بيانات التسجيل. يرجى المحاولة مجدداً.' }, 500);
     }
 

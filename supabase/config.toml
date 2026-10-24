@@ -16,3 +16,12 @@ verify_jwt = false
 
 [functions.manage-staff]
 verify_jwt = true
+
+[functions.approve-archived-application]
+verify_jwt = true
+
+[functions.delete-rejected-receipt]
+verify_jwt = true
+
+[functions.delete-application]
+verify_jwt = true

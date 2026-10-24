@@ -507,3 +507,25 @@ body{background:#fbf5e9;color:#41423b}
 }
 
 .staff-login-card .secondary-button{width:100%;min-height:44px;margin-top:9px}
+
+/* المرحلة السادسة: حفظ الأرشيف على الجهاز، سعة التسجيل، وتنزيل بطاقات الدخول */
+.receipt-archive-tools{display:flex;flex-direction:column;gap:11px;margin:16px 0;padding:15px;border:1px solid #d9e7dc;border-radius:13px;background:#f8fcf7;min-width:0}
+.receipt-archive-header{display:flex;flex-direction:column;gap:5px}
+.receipt-archive-header strong{font-size:14px;color:#18594b}
+.receipt-archive-header small,.receipt-archive-tools>.muted-line{font-size:11px;line-height:1.85;color:#627267}
+.receipt-archive-tools>button{width:100%;justify-content:center;min-height:46px}
+.archive-proof-card{display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:10px;border:1px solid #b5d4bf;background:#eff9f1;min-width:0}
+.archive-proof-card>strong{font-size:13px;color:#18594b}
+.archive-proof-card>code,.archive-proof-card small code{display:block;max-width:100%;overflow-wrap:anywhere;white-space:normal;color:#324e40}
+.archive-proof-card small{color:#5d6f62;font-size:10px;line-height:1.7;overflow-wrap:anywhere}
+.archive-confirm-check{display:flex;align-items:flex-start;gap:10px;padding:11px;border-radius:8px;background:#fff;border:1px solid #cfe2d2;font-size:12px;line-height:1.8;color:#304e3f;cursor:pointer}
+.archive-confirm-check input{width:19px;height:19px;flex:none;margin-top:2px;accent-color:#18594b}
+.unit-capacity-editor{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end;padding:13px;margin:12px 0;border:1px solid #e5dccb;border-radius:10px;background:#fffdf9}
+.unit-capacity-editor .field{margin:0;min-width:0}
+.unit-capacity-editor .field input{min-height:44px;min-width:0}
+.unit-capacity-editor>.secondary-button{min-height:44px;white-space:nowrap}
+.unit-capacity-editor>small{grid-column:1/-1;color:#7b8175;font-size:10px;line-height:1.8}
+.capacity-reached-badge{display:inline-flex;margin-top:7px;padding:5px 9px;border-radius:20px;background:#fff0e8;color:#a23a2c;font-size:10px;font-weight:800}
+.ticket-download-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;width:100%;margin:12px 0 18px}
+.ticket-download-actions button{min-height:46px;white-space:normal;line-height:1.6}
+@media(max-width:620px){.unit-capacity-editor{grid-template-columns:1fr}.unit-capacity-editor>small{grid-column:1}.unit-capacity-editor>.secondary-button{width:100%}.ticket-download-actions{grid-template-columns:1fr}.ticket-download-actions button{width:100%}.receipt-archive-tools{padding:12px}}

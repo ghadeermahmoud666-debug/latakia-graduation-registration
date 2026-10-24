@@ -1,6 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { anonKeyValue, configurationProblem, functionUrl, isConfigured, supabase } from './lib/supabase';
+import { createReceiptArchivePdf, downloadBlob as downloadArchiveBlob, safeArchiveFilename, saveArchiveToDirectory, sha256Blob } from './lib/localArchive';
+import { downloadTicketsAsOnePdf, downloadTicketsSeparatelyZip } from './lib/ticketDownloads';
 
 const DEFAULT_SETTINGS = {
   id: 1,
@@ -84,7 +86,7 @@ function App() {
   const loadCatalog = useCallback(async () => {
     if (!isConfigured) { setCatalogLoaded(true); return; }
     const [unitsResult, specsResult] = await Promise.all([
-      supabase.from('academic_units').select('id,name,unit_type,is_open,created_at').order('name'),
+      supabase.from('academic_units').select('id,name,unit_type,is_open,registration_capacity,registered_count,capacity_reached,created_at').order('name'),
       supabase.from('academic_specializations').select('id,unit_id,name,is_open,created_at').order('name'),
     ]);
     if (unitsResult.error || specsResult.error) {
@@ -467,11 +469,27 @@ function ApprovalCelebration({ name }) {
 }
 
 function TicketGallery({ tickets, application, batchName }) {
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState('');
   if (!tickets.length) return <div className="ticket-loading-note"><strong>تم قبول الطلب</strong><p>يجري تجهيز بطاقات الدخول. حدّث حالة الطلب بعد لحظات إن لم تظهر البطاقات.</p></div>;
+  async function downloadAllOnePdf() {
+    setDownloading(true); setDownloadError('');
+    try { await downloadTicketsAsOnePdf(tickets, application, batchName); }
+    catch (error) { setDownloadError(error.message || 'تعذّر تجهيز ملف البطاقات.'); }
+    finally { setDownloading(false); }
+  }
+  async function downloadSeparateTickets() {
+    setDownloading(true); setDownloadError('');
+    try { await downloadTicketsSeparatelyZip(tickets, application, batchName); }
+    catch (error) { setDownloadError(error.message || 'تعذّر تجهيز ملفات البطاقات.'); }
+    finally { setDownloading(false); }
+  }
   return <section className="ticket-gallery" id="entry-tickets">
-    <div className="ticket-gallery-heading"><div><span className="section-index">بطاقات الدخول</span><h3>بطاقاتك جاهزة للحفظ أو الطباعة</h3><p>توجد بطاقة مستقلة للخريج ولكل مرافق. كل رمز QR يُتحقق منه بشكل منفصل.</p></div><button type="button" className="secondary-button ticket-print-button" onClick={() => window.print()}>طباعة البطاقات</button></div>
+    <div className="ticket-gallery-heading"><div><span className="section-index">بطاقات الدخول</span><h3>بطاقاتك جاهزة للتنزيل</h3><p>يمكنك تنزيل جميع البطاقات في ملف PDF واحد متعدد الصفحات، أو تنزيل كل بطاقة كملف PDF مستقل داخل ZIP.</p></div></div>
+    <div className="ticket-download-actions"><button type="button" className="primary-button" disabled={downloading} onClick={downloadAllOnePdf}>{downloading ? 'جارٍ تجهيز البطاقات…' : 'تنزيل جميع البطاقات في PDF واحد'}</button><button type="button" className="secondary-button" disabled={downloading} onClick={downloadSeparateTickets}>تنزيل كل بطاقة منفصلة (ZIP)</button><button type="button" className="secondary-button ticket-print-button" onClick={() => window.print()}>طباعة البطاقات</button></div>
+    {downloadError && <div className="notice notice-warning" role="alert">{downloadError}</div>}
     <div className="ticket-cards-grid">{tickets.map((ticket) => <EntryTicketCard key={ticket.ticket_token} ticket={ticket} application={application} batchName={batchName} />)}</div>
-    <p className="ticket-privacy-note">لا تنشر صور البطاقات أو رموز QR على مواقع التواصل؛ كل رمز مخصص لدخول شخص واحد.</p>
+    <p className="ticket-privacy-note">احتفظ بالملفات لنفسك ولا تنشرها؛ كل رمز QR مخصص لدخول شخص واحد.</p>
   </section>;
 }
 
@@ -706,6 +724,12 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
   const [localSettings, setLocalSettings] = useState(settings);
   const [tab, setTab] = useState('applications');
   const [receiptLink, setReceiptLink] = useState('');
+  const [archiveDirectory, setArchiveDirectory] = useState(null);
+  const [archiveProof, setArchiveProof] = useState(null);
+  const [archiveConfirmed, setArchiveConfirmed] = useState(false);
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [deletingApplication, setDeletingApplication] = useState(false);
+  const [unitCapacityDrafts, setUnitCapacityDrafts] = useState({});
   const [newUnitName, setNewUnitName] = useState('');
   const [newUnitType, setNewUnitType] = useState('faculty');
   const [newSpecializationName, setNewSpecializationName] = useState('');
@@ -714,6 +738,13 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
 
   useEffect(() => setLocalSettings({ ...DEFAULT_SETTINGS, ...settings, payment_images: Array.isArray(settings.payment_images) ? settings.payment_images : [] }), [settings]);
   useEffect(() => { if (!isAdmin && (tab === 'settings' || tab === 'academic' || tab === 'team')) setTab('applications'); }, [isAdmin, tab]);
+  useEffect(() => {
+    setUnitCapacityDrafts(Object.fromEntries((catalog.units || []).map((unit) => [unit.id, unit.registration_capacity == null ? '' : String(unit.registration_capacity)])));
+  }, [catalog.units]);
+  useEffect(() => {
+    setArchiveProof(null);
+    setArchiveConfirmed(false);
+  }, [selected?.id]);
 
   const applyApplicationFilters = useCallback((query) => {
     let next = query;
@@ -772,22 +803,125 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
 
   async function decide(status) {
     if (!selected) return;
-    if (!selected.receipt_path) return notify('لا يمكن مراجعة الطلب قبل رفع فاتورة PDF.', 'error');
+    if (!selected.receipt_path) return notify('لا توجد فاتورة سحابية متاحة لهذا الطلب. إذا كانت مؤرشفة محليًا، افتح ملف الأرشيف من الجهاز الذي حُفظ عليه.', 'error');
     if (status === 'rejected' && rejectReason.trim().length < 3) return notify('اكتب سبب الرفض ليظهر للطالب عند تتبع الطلب.', 'error');
+    if (status === 'approved') {
+      if (!archiveProof || archiveProof.applicationId !== selected.id) return notify('قبل الموافقة، افتح الفاتورة ليُنشأ ملف PDF يحتوي بيانات الطالب والوصل ويحفظ في الأرشيف المحلي.', 'error');
+      if (!archiveConfirmed) return notify('أكد أن ملف الأرشيف محفوظ في الجهاز وأنك احتفظت بنسخة احتياطية أخرى قبل حذف الوصل السحابي.', 'error');
+    }
     setSavingDecision(true);
-    const { error } = await supabase.from('applications').update({ status, rejection_reason: status === 'rejected' ? rejectReason.trim() : null, reviewed_by: staffUser.id, reviewed_at: new Date().toISOString() }).eq('id', selected.id);
-    if (error) notify('تعذر حفظ القرار: ' + error.message, 'error');
-    else { notify(status === 'approved' ? 'تمت الموافقة على الطلب.' : 'تم رفض الطلب وحفظ السبب.', 'success'); setRejectReason(''); await loadApplications(); }
-    setSavingDecision(false);
+    try {
+      if (status === 'approved') {
+        const { data, error } = await supabase.functions.invoke('approve-archived-application', { body: {
+          application_id: selected.id,
+          archive_file_name: archiveProof.fileName,
+          archive_relative_path: archiveProof.relativePath,
+          archive_mode: archiveProof.mode,
+          archive_sha256: archiveProof.archiveSha256,
+          archive_size_bytes: archiveProof.archiveSizeBytes,
+          receipt_sha256: archiveProof.receiptSha256,
+          receipt_size_bytes: archiveProof.receiptSizeBytes,
+          archive_confirmed: true,
+          backup_confirmed: true,
+        } });
+        if (error || data?.error) throw new Error(data?.error || error?.message || 'تعذر الموافقة أو حذف الوصل السحابي.');
+        notify('تمت الموافقة على الطلب وحُذف الوصل من التخزين السحابي بعد حفظ الأرشيف. بقيت بيانات الطالب وبطاقات الدخول.', 'success');
+        setArchiveProof(null); setArchiveConfirmed(false);
+      } else {
+        const { error } = await supabase.from('applications').update({ status: 'rejected', rejection_reason: rejectReason.trim(), reviewed_by: staffUser.id, reviewed_at: new Date().toISOString() }).eq('id', selected.id);
+        if (error) throw error;
+        notify('تم رفض الطلب وحفظ السبب. بقيت الفاتورة في التخزين حتى يحذفها المدير.', 'success');
+        setRejectReason('');
+      }
+      await loadApplications();
+    } catch (error) { notify(error.message || 'تعذر حفظ القرار.', 'error'); }
+    finally { setSavingDecision(false); }
+  }
+
+  async function chooseArchiveDirectory() {
+    if (typeof window.showDirectoryPicker !== 'function') {
+      return notify('هذا المتصفح لا يدعم الكتابة المباشرة إلى مجلد. سيُنزل ملف الأرشيف إلى مجلد التنزيلات بدلًا من ذلك.', 'warning');
+    }
+    try {
+      const handle = await window.showDirectoryPicker({ id: 'latakia-receipt-archive', mode: 'readwrite', startIn: 'desktop' });
+      if (handle.requestPermission) {
+        const permission = await handle.requestPermission({ mode: 'readwrite' });
+        if (permission !== 'granted') throw new Error('لم يتم منح إذن الكتابة إلى المجلد.');
+      }
+      setArchiveDirectory(handle);
+      notify(`تم تحديد مجلد أساس للأرشيف: ${handle.name}. سيُنشئ الموقع داخله مجلد الإيصالات تلقائيًا.`, 'success');
+    } catch (error) {
+      if (error?.name !== 'AbortError') notify(error.message || 'تعذر اختيار مجلد الأرشيف.', 'error');
+    }
   }
 
   async function openReceipt() {
-    if (!selected?.receipt_path && selected?.receipt_archive_path) return notify(`تمت أرشفة الفاتورة خارج التخزين السحابي في: ${selected.receipt_archive_path}. للوصول إليها، استخدم وحدة الأرشيف المؤمّنة.`, 'info');
-    if (!selected?.receipt_path) return notify('لم يرفع الطالب الفاتورة بعد.', 'info');
-    const { data, error } = await supabase.storage.from('receipts').createSignedUrl(selected.receipt_path, 300);
-    if (error) return notify('تعذر فتح الفاتورة: ' + error.message, 'error');
-    setReceiptLink(data.signedUrl);
-    window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
+    if (!selected?.receipt_path) return notify('لم يرفع الطالب الفاتورة بعد أو أنها حُذفت بعد الأرشفة.', 'info');
+    const reviewTab = window.open('about:blank', '_blank');
+    setArchiveBusy(true); setArchiveProof(null); setArchiveConfirmed(false);
+    try {
+      const { data: receiptBlob, error } = await supabase.storage.from('receipts').download(selected.receipt_path);
+      if (error || !receiptBlob) throw new Error('تعذر تنزيل الفاتورة من التخزين الآمن: ' + (error?.message || 'الملف غير موجود.'));
+      const receiptObjectUrl = URL.createObjectURL(receiptBlob);
+      if (reviewTab) reviewTab.location.href = receiptObjectUrl;
+      else notify('تم تنزيل الفاتورة. اسمح بالنوافذ المنبثقة إن أردت فتح الأصل في تبويب مستقل.', 'info');
+      window.setTimeout(() => URL.revokeObjectURL(receiptObjectUrl), 10 * 60 * 1000);
+
+      const archiveBlob = await createReceiptArchivePdf(selected, receiptBlob, settings);
+      const archiveHash = await sha256Blob(archiveBlob);
+      const receiptHash = await sha256Blob(receiptBlob);
+      const filename = `${safeArchiveFilename(selected.tracking_code)}_${safeArchiveFilename(selected.full_name)}.pdf`;
+      let relativePath = `تنزيلات المتصفح/${filename}`;
+      let mode = 'download';
+      if (archiveDirectory) {
+        try {
+          const saved = await saveArchiveToDirectory(archiveDirectory, selected, archiveBlob);
+          relativePath = saved.relativePath; mode = 'directory';
+        } catch (saveError) {
+          downloadArchiveBlob(archiveBlob, filename);
+          mode = 'download';
+          relativePath = `تنزيلات المتصفح/${filename}`;
+          notify('تعذرت الكتابة إلى المجلد المحدد؛ بدأ تنزيل ملف الأرشيف كبديل. تحقق من حفظه قبل الموافقة.', 'warning');
+        }
+      } else {
+        downloadArchiveBlob(archiveBlob, filename);
+        notify('تم تجهيز ملف PDF للأرشفة وتنزيله. اختر مجلدًا في المرة القادمة لكتابته مباشرة، وتحقق من حفظه قبل الموافقة.', 'info');
+      }
+      setArchiveProof({ applicationId: selected.id, fileName: filename, relativePath, mode, archiveSha256: archiveHash, archiveSizeBytes: archiveBlob.size, receiptSha256: receiptHash, receiptSizeBytes: receiptBlob.size });
+    } catch (error) {
+      if (reviewTab) reviewTab.close();
+      notify(error.message || 'تعذر فتح الفاتورة أو إنشاء ملف الأرشفة.', 'error');
+    } finally { setArchiveBusy(false); }
+  }
+
+  async function deleteSelectedReceipt() {
+    if (!isAdmin || !selected || selected.status !== 'rejected' || !selected.receipt_path) return;
+    if (!archiveProof || archiveProof.applicationId !== selected.id || !archiveConfirmed) return notify('افتح الفاتورة أولًا وأنشئ ملف الأرشيف، ثم أكد حفظ نسختين قبل الحذف.', 'error');
+    if (!window.confirm(`حذف فاتورة الطلب ${selected.tracking_code} من التخزين السحابي؟ ستبقى بيانات الطالب محفوظة.`)) return;
+    setDeletingApplication(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('delete-rejected-receipt', { body: { application_id: selected.id, archive_file_name: archiveProof?.fileName, archive_relative_path: archiveProof?.relativePath, archive_mode: archiveProof?.mode, archive_sha256: archiveProof?.archiveSha256, archive_size_bytes: archiveProof?.archiveSizeBytes, receipt_sha256: archiveProof?.receiptSha256, receipt_size_bytes: archiveProof?.receiptSizeBytes, archive_confirmed: archiveConfirmed, backup_confirmed: archiveConfirmed } });
+      if (error || data?.error) throw new Error(data?.error || error?.message || 'تعذر حذف الفاتورة.');
+      notify('حُذفت فاتورة الطلب المرفوض من السحابة بعد حفظ بيانات الأرشيف، وبقي سجل الطالب محفوظًا. احتفظوا بالنسخ المحلية حسب سياسة الأرشفة.', 'success');
+      setArchiveProof(null); setArchiveConfirmed(false);
+      await loadApplications();
+    } catch (error) { notify(error.message || 'تعذر حذف الفاتورة.', 'error'); }
+    finally { setDeletingApplication(false); }
+  }
+
+  async function deleteSelectedApplication() {
+    if (!isAdmin || !selected) return;
+    const confirmed = window.confirm(`تحذير نهائي: حذف كامل سجل الطالب ${selected.full_name} ورمز التتبع ${selected.tracking_code}؟ سيتم حذف الفاتورة السحابية وبطاقات الدخول المرتبطة. أي ملف أرشيف محفوظ يدويًا على أجهزة الفريق لن يُحذف تلقائيًا، ويجب حذفه يدويًا حسب سياسة الاحتفاظ. لا يمكن التراجع.`);
+    if (!confirmed) return;
+    setDeletingApplication(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('delete-application', { body: { application_id: selected.id, confirm: true } });
+      if (error || data?.error) throw new Error(data?.error || error?.message || 'تعذر حذف سجل الطالب.');
+      notify('تم حذف سجل الطالب والملفات السحابية المرتبطة به. تذكّر أن نسخ الأرشيف المحلية على أجهزة الفريق لا تُحذف تلقائيًا.', 'success');
+      setSelected(null); setArchiveProof(null); setArchiveConfirmed(false);
+      await loadApplications();
+    } catch (error) { notify(error.message || 'تعذر حذف سجل الطالب.', 'error'); }
+    finally { setDeletingApplication(false); }
   }
 
   async function saveSettings(event) {
@@ -848,6 +982,17 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
     }
     setLocalSettings((old) => ({ ...old, payment_images: [...(Array.isArray(old.payment_images) ? old.payment_images : []), ...urls] }));
     notify('تم رفع الصور التوضيحية. اضغط حفظ الإعدادات لإظهارها للطلاب.', 'success');
+  }
+
+  async function saveUnitCapacity(unit) {
+    if (!isAdmin) return notify('تحديد السعة متاح للمدير فقط.', 'error');
+    const raw = String(unitCapacityDrafts[unit.id] ?? '').trim();
+    const capacity = raw === '' ? null : Number(raw);
+    if (capacity !== null && (!Number.isInteger(capacity) || capacity < 1 || capacity > 1000000)) return notify('أدخل حدًا صحيحًا بين 1 و1,000,000 أو اترك الحقل فارغًا بلا حد.', 'error');
+    const { error } = await supabase.from('academic_units').update({ registration_capacity: capacity }).eq('id', unit.id);
+    if (error) return notify('تعذر حفظ سعة الجهة: ' + error.message, 'error');
+    notify(capacity === null ? 'تم إلغاء الحد الأقصى لهذه الجهة.' : `تم حفظ الحد الأقصى ${fmt(capacity)} طلب لهذه الجهة. سيغلق التسجيل تلقائيًا عند بلوغه.`, 'success');
+    await refreshCatalog();
   }
 
   async function addUnit(event) {
@@ -959,7 +1104,76 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
         {loading ? <div className="empty-state">جارٍ تحميل الطلبات…</div> : filtered.length === 0 ? <div className="empty-state"><span>⌕</span><strong>لا توجد طلبات مطابقة</strong><p>عدّل البحث أو الفلاتر لعرض نتائج أخرى.</p></div> : <div className="table-scroll"><table className="applications-table"><thead><tr><th>الطالب / الرمز</th><th>الكلية / الاختصاص</th><th>المبلغ</th><th>الحالة</th><th>التاريخ</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : ''} onClick={() => { setSelected(item); setRejectReason(item.rejection_reason || ''); setReceiptLink(''); }}><td><strong>{item.full_name}</strong><small>{item.tracking_code} · {item.university_number}</small><small>{item.phone_number || '—'}</small></td><td><span>{item.department}</span><small>{item.specialization}</small></td><td><strong>{fmt(item.amount_syp)} ل.س</strong><small>{fmt(item.companions)} مرافق · {fmt(item.carried_subjects)} مادة محمولة</small></td><td><span className={`status-badge ${STATUS[item.status]?.className || 'pending'}`}>{STATUS[item.status]?.label || item.status}</span></td><td>{humanDate(item.created_at)}</td></tr>)}</tbody></table></div>}
         <div className="pagination-row"><span>عرض {fmt(filtered.length ? pageNumber * pageSize + 1 : 0)}–{fmt(Math.min((pageNumber + 1) * pageSize, totalFiltered))} من {fmt(totalFiltered)}</span><div><button className="secondary-button" type="button" disabled={pageNumber <= 0 || loading} onClick={() => setPageNumber((old) => Math.max(0, old - 1))}>السابق</button><strong>صفحة {fmt(pageNumber + 1)} من {fmt(Math.max(1, Math.ceil(totalFiltered / pageSize)))}</strong><button className="secondary-button" type="button" disabled={(pageNumber + 1) * pageSize >= totalFiltered || loading} onClick={() => setPageNumber((old) => old + 1)}>التالي</button></div></div>
       </div>
-      <div className="panel review-panel">{selected ? <><div className="review-top"><span className="section-index">تفاصيل الطلب</span><span className={`status-badge ${STATUS[selected.status]?.className || 'pending'}`}>{STATUS[selected.status]?.label || selected.status}</span></div><h2>{selected.full_name}</h2><div className="review-code" dir="ltr">{selected.tracking_code}</div><div className="review-details"><div><span>الرقم الجامعي</span><strong>{selected.university_number}</strong></div><div><span>هاتف التواصل</span><strong>{selected.phone_number || '—'}</strong></div><div><span>الكلية أو المعهد</span><strong>{selected.department}</strong></div><div><span>الاختصاص</span><strong>{selected.specialization || 'لا يوجد اختصاص'}</strong></div><div><span>المواد المحمولة</span><strong>{fmt(selected.carried_subjects)}</strong></div><div><span>عدد المرافقين</span><strong>{fmt(selected.companions)}</strong></div><div><span>المبلغ الإجمالي</span><strong>{fmt(selected.amount_syp)} ل.س</strong></div><div><span>تاريخ الطلب</span><strong>{humanDate(selected.created_at)}</strong></div></div>{selected.receipt_path ? <button className="receipt-open-button" onClick={openReceipt}>عرض فاتورة الدفع PDF ↗</button> : selected.receipt_archive_path ? <div className="notice notice-warning"><strong>الفاتورة مؤرشفة خارج التخزين السحابي</strong><p>مسار الأرشيف: <code dir="ltr">{selected.receipt_archive_path}</code>. يلزم الوصول إلى وحدة الأرشيف المؤمّنة لمعاينة الملف.</p></div> : <div className="important-warning"><strong>لم تُرفع الفاتورة بعد</strong></div>}{selected.status === 'awaiting_payment' && <div className="important-warning"><strong>لا يمكن مراجعة هذا الطلب بعد</strong><p>الطلب بانتظار أن يدفع الطالب ويرفع فاتورة PDF. لن تظهر أزرار القرار قبل رفع الفاتورة.</p></div>}{selected.status === 'rejected' && selected.rejection_reason && <div className="prior-reason"><strong>سبب الرفض المسجل</strong><p>{selected.rejection_reason}</p></div>}{selected.receipt_path && <><div className="decision-divider" /><label className="field"><span>سبب الرفض (مطلوب عند الرفض)</span><textarea rows="3" maxLength="1000" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="اكتب سبب الرفض بوضوح ليظهر للطالب عند تتبع الطلب…" /></label><div className="decision-actions"><button className="reject-button" disabled={savingDecision} onClick={() => decide('rejected')}>رفض الطلب</button><button className="approve-button" disabled={savingDecision} onClick={() => decide('approved')}>✓ موافقة على الطلب</button></div><small className="muted-line">سيتم تسجيل حساب الموظف وتاريخ اتخاذ القرار.</small></>}</> : <div className="review-empty"><div>☷</div><strong>اختر طلباً لمراجعته</strong><p>اضغط على أي صف في قائمة الطلبات لعرض التفاصيل والفاتورة عند توفرها.</p></div>}</div>
+      <div className="panel review-panel">
+        {selected ? (
+          <>
+            <div className="review-top">
+              <span className="section-index">تفاصيل الطلب</span>
+              <span className={`status-badge ${STATUS[selected.status]?.className || 'pending'}`}>{STATUS[selected.status]?.label || selected.status}</span>
+            </div>
+            <h2>{selected.full_name}</h2>
+            <div className="review-code" dir="ltr">{selected.tracking_code}</div>
+            <div className="review-details">
+              <div><span>الرقم الجامعي</span><strong>{selected.university_number}</strong></div>
+              <div><span>هاتف التواصل</span><strong>{selected.phone_number || '—'}</strong></div>
+              <div><span>الكلية أو المعهد</span><strong>{selected.department}</strong></div>
+              <div><span>الاختصاص</span><strong>{selected.specialization || 'لا يوجد اختصاص'}</strong></div>
+              <div><span>المواد المحمولة</span><strong>{fmt(selected.carried_subjects)}</strong></div>
+              <div><span>عدد المرافقين</span><strong>{fmt(selected.companions)}</strong></div>
+              <div><span>المبلغ الإجمالي</span><strong>{fmt(selected.amount_syp)} ل.س</strong></div>
+              <div><span>تاريخ الطلب</span><strong>{humanDate(selected.created_at)}</strong></div>
+            </div>
+            {selected.receipt_path ? (
+              <div className="receipt-archive-tools">
+                <div className="receipt-archive-header">
+                  <strong>أرشفة الفاتورة على هذا الجهاز</strong>
+                  <small>سيُنشأ PDF يبدأ ببيانات الطالب ويضم صفحات فاتورة شام كاش الأصلية. يبقى الوصل سحابيًا حتى الموافقة فقط.</small>
+                </div>
+                <button type="button" className="secondary-button" onClick={chooseArchiveDirectory}>
+                  {archiveDirectory ? `مجلد الأرشيف: ${archiveDirectory.name}` : 'اختيار مجلد أرشيف على هذا الجهاز'}
+                </button>
+                <small className="muted-line">على الحاسوب يمكن اختيار مجلد ثابت. على الهواتف أو المتصفحات غير المدعومة سيُنزل ملف الأرشيف إلى التنزيلات ويجب حفظه والتحقق منه يدويًا.</small>
+                <button type="button" className="receipt-open-button" disabled={archiveBusy} onClick={openReceipt}>
+                  {archiveBusy ? 'جارٍ فتح الفاتورة وإنشاء الأرشيف…' : 'فتح الفاتورة وإنشاء ملف الأرشيف PDF ↗'}
+                </button>
+                {archiveProof?.applicationId === selected.id && (
+                  <div className="archive-proof-card">
+                    <strong>تم تجهيز ملف الأرشيف</strong>
+                    <code dir="ltr">{archiveProof.fileName}</code>
+                    <small>المسار المنطقي: {archiveProof.relativePath}</small>
+                    <small>الحجم: {fmt(archiveProof.archiveSizeBytes)} بايت · SHA-256: <code dir="ltr">{archiveProof.archiveSha256}</code></small>
+                    <label className="archive-confirm-check">
+                      <input type="checkbox" checked={archiveConfirmed} onChange={(e) => setArchiveConfirmed(e.target.checked)} />
+                      <span>أؤكد أن ملف PDF حُفظ فعلًا ويمكن فتحه، وأنني أخذت نسخة احتياطية ثانية قبل حذف الوصل من التخزين السحابي.</span>
+                    </label>
+                  </div>
+                )}
+              </div>
+            ) : selected.receipt_archive_path ? (
+              <div className="notice notice-warning"><strong>الفاتورة غير موجودة في التخزين السحابي</strong><p>مسار الأرشيف المسجل: <code dir="ltr">{selected.receipt_archive_path}</code>. يلزم الرجوع إلى الجهاز أو المجلد الذي حُفظ عليه الأرشيف.</p></div>
+            ) : (
+              <div className="important-warning"><strong>لم تُرفع الفاتورة بعد</strong></div>
+            )}
+            {selected.status === 'awaiting_payment' && <div className="important-warning"><strong>لا يمكن مراجعة هذا الطلب بعد</strong><p>الطلب بانتظار أن يدفع الطالب ويرفع فاتورة PDF.</p></div>}
+            {selected.status === 'rejected' && selected.rejection_reason && <div className="prior-reason"><strong>سبب الرفض المسجل</strong><p>{selected.rejection_reason}</p></div>}
+            {selected.status === 'rejected' && isAdmin && selected.receipt_path && <button type="button" className="reject-button full-width-button" disabled={deletingApplication || archiveProof?.applicationId !== selected.id || !archiveConfirmed} onClick={deleteSelectedReceipt}>{deletingApplication ? 'جارٍ حذف الفاتورة…' : 'أرشفة موثقة ثم حذف فاتورة الطلب المرفوض (يبقى سجل الطالب)'}</button>}
+            {isAdmin && <button type="button" className="reject-button full-width-button" disabled={deletingApplication} onClick={deleteSelectedApplication}>{deletingApplication ? 'جارٍ حذف سجل الطالب…' : 'حذف كامل بيانات الطالب نهائيًا'}</button>}
+            {selected.receipt_path && selected.status === 'pending' && (
+              <>
+                <div className="decision-divider" />
+                <label className="field"><span>سبب الرفض (مطلوب عند الرفض)</span><textarea rows="3" maxLength={1000} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="اكتب سبب الرفض بوضوح ليظهر للطالب عند تتبع الطلب…" /></label>
+                <div className="decision-actions">
+                  <button type="button" className="reject-button" disabled={savingDecision} onClick={() => decide('rejected')}>رفض الطلب</button>
+                  <button type="button" className="approve-button" disabled={savingDecision || !archiveProof || archiveProof.applicationId !== selected.id || !archiveConfirmed} onClick={() => decide('approved')}>✓ أرشفة ثم الموافقة وحذف الوصل السحابي</button>
+                </div>
+                <small className="muted-line">لن يُحذف الوصل من التخزين السحابي إلا بعد حفظ بيانات الأرشيف والتحقق من بصمة الفاتورة وتأكيد النسخة الاحتياطية.</small>
+              </>
+            )}
+          </>
+        ) : (
+          <div className="review-empty"><div>☷</div><strong>اختر طلباً لمراجعته</strong><p>اضغط على أي صف في قائمة الطلبات لعرض التفاصيل والفاتورة عند توفرها.</p></div>
+        )}
+      </div>
     </>}
 
     {tab === 'team' && isAdmin && <StaffManagementPanel staffUser={staffUser} catalog={catalog} notify={notify} />}
@@ -969,7 +1183,7 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
     {tab === 'academic' && isAdmin && <div className="panel settings-panel catalog-admin-panel"><div className="settings-header"><div><span className="section-index">قوائم التسجيل</span><h2>إدارة الكليات والمعاهد والاختصاصات</h2><p>يمكنك فتح التسجيل أو إيقافه لكل كلية أو معهد ولكل اختصاص بشكل مستقل. التغييرات تنعكس على القوائم التي يراها الطلاب.</p></div><button className="secondary-button" type="button" onClick={refreshCatalog}>تحديث القوائم ↻</button></div>
       {catalogError && <div className="notice notice-warning"><strong>قاعدة البيانات تحتاج إلى الترقية</strong><p>شغّل ملف supabase/migrations/002_staged_registration_and_academic_catalog.sql في SQL Editor أولاً. التفاصيل: {catalogError}</p></div>}
       <form className="catalog-add-form" onSubmit={addUnit}><label className="field"><span>نوع الجهة</span><select value={newUnitType} onChange={(e) => setNewUnitType(e.target.value)}><option value="faculty">كلية</option><option value="institute">معهد</option></select></label><label className="field"><span>اسم الكلية أو المعهد</span><input value={newUnitName} onChange={(e) => setNewUnitName(e.target.value)} placeholder="مثال: كلية الهندسة المعلوماتية" required /></label><button className="primary-button" type="submit"><span>إضافة الجهة</span></button></form>
-      {units.length === 0 ? <div className="empty-state"><strong>لم تتم إضافة كليات أو معاهد بعد</strong><p>أضف الجهات التي تريد إتاحة التسجيل فيها، ثم أضف الاختصاصات إن وجدت.</p></div> : <div className="academic-units-list">{units.map((unit) => { const unitSpecs = specs.filter((spec) => spec.unit_id === unit.id); return <article className="academic-unit-card" key={unit.id}><div className="academic-unit-top"><div><span className="academic-unit-type">{unit.unit_type === 'institute' ? 'معهد' : 'كلية'}</span><h3>{unit.name}</h3><small>{unitSpecs.length} اختصاص مسجل</small></div><label className="catalog-toggle"><input type="checkbox" checked={Boolean(unit.is_open)} onChange={(e) => toggleUnit(unit, e.target.checked)} /><span>{unit.is_open ? 'التسجيل مفتوح' : 'التسجيل متوقف'}</span></label><button type="button" className="reject-button catalog-delete" onClick={() => deleteUnit(unit)}>حذف</button></div><div className="academic-specializations">{unitSpecs.length === 0 ? <p className="no-specs-admin">لم تتم إضافة اختصاصات لهذه الجهة؛ سيظهر للطالب «لا يوجد اختصاص».</p> : unitSpecs.map((spec) => <div className="specialization-row" key={spec.id}><span>{spec.name}</span><label className="catalog-toggle"><input type="checkbox" checked={Boolean(spec.is_open)} disabled={!unit.is_open} onChange={(e) => toggleSpecialization(spec, e.target.checked)} /><span>{spec.is_open ? 'مفتوح' : 'مغلق'}</span></label><button type="button" className="text-delete" onClick={() => deleteSpecialization(spec)}>حذف</button></div>)}</div></article>; })}</div>}
+      {units.length === 0 ? <div className="empty-state"><strong>لم تتم إضافة كليات أو معاهد بعد</strong><p>أضف الجهات التي تريد إتاحة التسجيل فيها، ثم أضف الاختصاصات إن وجدت.</p></div> : <div className="academic-units-list">{units.map((unit) => { const unitSpecs = specs.filter((spec) => spec.unit_id === unit.id); return <article className="academic-unit-card" key={unit.id}><div className="academic-unit-top"><div><span className="academic-unit-type">{unit.unit_type === 'institute' ? 'معهد' : 'كلية'}</span><h3>{unit.name}</h3><small>{unitSpecs.length} اختصاص مسجل · {fmt(unit.registered_count || 0)} مقعد محجوز (الخريج والمرافقون) {unit.registration_capacity ? `من ${fmt(unit.registration_capacity)}` : 'دون حد أعلى'}</small>{unit.capacity_reached && <span className="capacity-reached-badge">اكتملت السعة وأُغلق التسجيل تلقائيًا</span>}</div><label className="catalog-toggle"><input type="checkbox" checked={Boolean(unit.is_open)} disabled={Boolean(unit.capacity_reached)} onChange={(e) => toggleUnit(unit, e.target.checked)} /><span>{unit.capacity_reached ? 'مغلق لاكتمال السعة' : unit.is_open ? 'التسجيل مفتوح' : 'التسجيل متوقف'}</span></label><button type="button" className="reject-button catalog-delete" onClick={() => deleteUnit(unit)}>حذف</button></div><div className="unit-capacity-editor"><label className="field"><span>الحد الأقصى للحضور لهذه الجهة (الخريجون + المرافقون)</span><input type="number" min="1" max="1000000" step="1" value={unitCapacityDrafts[unit.id] ?? ''} onChange={(e) => setUnitCapacityDrafts((old) => ({ ...old, [unit.id]: e.target.value }))} placeholder="اتركه فارغًا دون حد" /></label><button type="button" className="secondary-button" onClick={() => saveUnitCapacity(unit)}>حفظ الحد</button><small>يحتسب كل خريج مع عدد مرافقيه في الطلبات غير المرفوضة، بما فيها بانتظار الدفع وقيد التدقيق والمقبولة. لا يحتسب الطلبات المرفوضة أو المحذوفة. يغلق التسجيل تلقائيًا عند بلوغ الحد.</small></div><div className="academic-specializations">{unitSpecs.length === 0 ? <p className="no-specs-admin">لم تتم إضافة اختصاصات لهذه الجهة؛ سيظهر للطالب «لا يوجد اختصاص».</p> : unitSpecs.map((spec) => <div className="specialization-row" key={spec.id}><span>{spec.name}</span><label className="catalog-toggle"><input type="checkbox" checked={Boolean(spec.is_open)} disabled={!unit.is_open} onChange={(e) => toggleSpecialization(spec, e.target.checked)} /><span>{spec.is_open ? 'مفتوح' : 'مغلق'}</span></label><button type="button" className="text-delete" onClick={() => deleteSpecialization(spec)}>حذف</button></div>)}</div></article>; })}</div>}
       <div className="specialization-add-box"><h3>إضافة اختصاص إلى كلية أو معهد</h3><form className="catalog-add-form" onSubmit={addSpecialization}><label className="field"><span>الكلية أو المعهد</span><select value={specializationTargetUnit} onChange={(e) => setSpecializationTargetUnit(e.target.value)} required><option value="">اختر الجهة</option>{units.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></label><label className="field"><span>اسم الاختصاص</span><input value={newSpecializationName} onChange={(e) => setNewSpecializationName(e.target.value)} placeholder="مثال: هندسة البرمجيات" required /></label><button className="primary-button" type="submit" disabled={units.length === 0}><span>إضافة الاختصاص</span></button></form></div>
     </div>}
     <div className="admin-footnote">مسجل الدخول: <strong>{staffUser.email}</strong> <span>•</span> صلاحية الحساب: <strong>{isAdmin ? 'مدير' : 'مراجع'}</strong> <span>•</span> لا تشارك بيانات دخول الفريق مع الطلاب.</div>
