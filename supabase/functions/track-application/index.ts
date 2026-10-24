@@ -29,7 +29,7 @@ Deno.serve(async (request) => {
     }
 
     const { data, error } = await admin.from('applications')
-      .select('id, tracking_code, full_name, university_number, phone_number, amount_syp, status, rejection_reason, created_at, companions, carried_subjects, department, specialization')
+      .select('id, tracking_code, full_name, amount_syp, status, rejection_reason, created_at, companions, carried_subjects, department, specialization')
       .eq('tracking_code', code)
       .maybeSingle();
     if (error) {

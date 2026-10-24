@@ -5,6 +5,7 @@ import { anonKeyValue, configurationProblem, functionUrl, isConfigured, supabase
 const DEFAULT_SETTINGS = {
   id: 1,
   event_title: 'التسجيل لحفلات التخرج',
+  batch_name: 'دفعة 2026',
   university_label: 'جامعة اللاذقية',
   organizer: 'اتحاد طلبة سوريا – فرع محافظة اللاذقية',
   registration_open: false,
@@ -41,7 +42,8 @@ function App() {
   const [catalogLoaded, setCatalogLoaded] = useState(false);
   const [catalogError, setCatalogError] = useState('');
   const ticketTokenFromUrl = new URLSearchParams(window.location.search).get('ticket') || '';
-  const [page, setPage] = useState(() => ticketTokenFromUrl ? 'verify' : 'register');
+  const teamRouteRequested = new URLSearchParams(window.location.search).get('team') === '1';
+  const [page, setPage] = useState(() => ticketTokenFromUrl ? 'verify' : teamRouteRequested ? 'staff' : 'register');
   const [registrationStage, setRegistrationStage] = useState(() => safeSessionGet() ? 'code' : 'details');
   const [toast, setToast] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -63,6 +65,8 @@ function App() {
   const [authChecking, setAuthChecking] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [newStaffPassword, setNewStaffPassword] = useState('');
+  const [confirmStaffPassword, setConfirmStaffPassword] = useState('');
 
   const notify = useCallback((message, kind = 'info') => {
     setToast({ message, kind });
@@ -136,7 +140,7 @@ function App() {
       setStaffUser(session?.user ?? null);
       if (!session?.user) {
         setStaffRole(null);
-        setPage((current) => current === 'admin' ? 'staff' : current);
+        setPage((current) => (current === 'admin' || current === 'staff-password') ? 'staff' : current);
       } else {
         window.setTimeout(() => loadStaffRole(session.user.id), 0);
       }
@@ -287,20 +291,63 @@ function App() {
         await supabase.auth.signOut();
         throw new Error('هذا الحساب غير مخوّل للوصول إلى لوحة الفريق. اطلب من مدير النظام إضافته إلى فريق المراجعة.');
       }
-      setStaffUser(data.user); setStaffRole(role.role); setPage('admin'); notify('مرحباً بك في لوحة المراجعة.', 'success');
+      setStaffUser(data.user); setStaffRole(role.role); window.history.replaceState({}, '', `${window.location.pathname}?team=1`);
+      if (data.user.app_metadata?.must_change_password) {
+        setPage('staff-password');
+        notify('لأمان الحساب، غيّر كلمة المرور المؤقتة قبل متابعة العمل.', 'info');
+      } else {
+        setPage('admin');
+        notify('مرحباً بك في لوحة المراجعة.', 'success');
+      }
     } catch (error) { notify(error.message || 'تعذر تسجيل الدخول.', 'error'); }
+    finally { setAuthChecking(false); }
+  }
+
+  async function handleForcedPasswordChange(event) {
+    event.preventDefault();
+    if (newStaffPassword.length < 12) return notify('اختر كلمة مرور من 12 محرفاً على الأقل.', 'error');
+    if (newStaffPassword !== confirmStaffPassword) return notify('تأكيد كلمة المرور غير مطابق.', 'error');
+    setAuthChecking(true);
+    try {
+      const { data, error } = await supabase.auth.updateUser({ password: newStaffPassword });
+      if (error) throw error;
+      const { data: completion, error: completionError } = await supabase.functions.invoke('manage-staff', { body: { action: 'complete_password_change' } });
+      if (completionError || completion?.error) throw new Error(completion?.error || completionError?.message || 'تم تغيير كلمة المرور، لكن تعذر تسجيل اكتمال خطوة الأمان. اضغط حفظ مجددًا للمحاولة.');
+      if (data.user) setStaffUser(data.user);
+      setNewStaffPassword(''); setConfirmStaffPassword(''); setPage('admin');
+      notify('تم تغيير كلمة المرور. أهلاً بك في لوحة الفريق.', 'success');
+    } catch (error) { notify(error.message || 'تعذر تغيير كلمة المرور.', 'error'); }
     finally { setAuthChecking(false); }
   }
 
   async function signOut() {
     await supabase.auth.signOut();
-    setStaffUser(null); setStaffRole(null); setPage('staff');
+    setStaffUser(null); setStaffRole(null); setPage('staff'); window.history.replaceState({}, '', `${window.location.pathname}?team=1`);
   }
 
   const paymentImages = Array.isArray(settings.payment_images) ? settings.payment_images : [];
 
+  // Team access is intentionally absent from public navigation. Authentication and RLS remain the actual security boundary.
+  useEffect(() => {
+    if (!staffUser) return undefined;
+    let timeoutId;
+    const logoutAfterInactivity = () => {
+      window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout(async () => {
+        await supabase.auth.signOut();
+        setStaffUser(null); setStaffRole(null); setPage('staff');
+        window.history.replaceState({}, '', `${window.location.pathname}?team=1`);
+        notify('تم تسجيل الخروج تلقائياً بسبب عدم النشاط.', 'info');
+      }, 20 * 60 * 1000);
+    };
+    const events = ['pointerdown', 'keydown', 'touchstart', 'click'];
+    events.forEach((eventName) => window.addEventListener(eventName, logoutAfterInactivity, { passive: true }));
+    logoutAfterInactivity();
+    return () => { window.clearTimeout(timeoutId); events.forEach((eventName) => window.removeEventListener(eventName, logoutAfterInactivity)); };
+  }, [staffUser, notify]);
+
   return <div className="app-shell">
-    <div className="topline"><div className="container topline-inner"><span><i className="dot" /> اتحاد طلبة سوريا</span><span>دفعة التخرج 2026</span></div></div>
+    <div className="topline"><div className="container topline-inner"><span><i className="dot" /> اتحاد طلبة سوريا</span><span>{settings.batch_name || DEFAULT_SETTINGS.batch_name}</span></div></div>
     <header className="site-header">
       <div className="container header-inner">
         <button className="brand" onClick={() => { setPage('register'); setRegistrationStage(paymentApplication ? registrationStage : 'details'); }} aria-label="العودة إلى الرئيسية">
@@ -310,7 +357,6 @@ function App() {
         <nav className="main-nav" aria-label="التنقل الرئيسي">
           <button className={page === 'register' ? 'active' : ''} onClick={() => setPage('register')}>التسجيل</button>
           <button className={page === 'track' ? 'active' : ''} onClick={() => { setPage('track'); setTrackingResult(null); }}>تتبع الطلب</button>
-          <button className={page === 'staff' || page === 'admin' ? 'active' : ''} onClick={() => setPage(staffUser ? 'admin' : 'staff')}><span className="nav-lock">⌑</span> دخول الفريق</button>
         </nav>
       </div>
     </header>
@@ -322,7 +368,7 @@ function App() {
           <div className="container hero-content">
             <div className="hero-copy">
               <div className="eyebrow"><span className="eyebrow-star">✳</span> لحظة تستحق أن تُخلّد</div>
-              <h1>{settings.event_title || 'التسجيل لحفلات التخرج'}<br /><em>دفعة 2026</em></h1>
+              <h1>{settings.event_title || 'التسجيل لحفلات التخرج'}<br /><em>{settings.batch_name || DEFAULT_SETTINGS.batch_name}</em></h1>
               <p>اتبع الخطوات بالترتيب، وانسخ رمز التتبع قبل الدفع. لن تُقبل أي فاتورة لا تتضمن رمز التتبع في ملاحظات تحويل شام كاش.</p>
               <div className="hero-points"><span><b>01</b> بيانات الطالب</span><span><b>02</b> رمز التتبع</span><span><b>03</b> الدفع والفاتورة</span></div>
             </div>
@@ -391,17 +437,18 @@ function App() {
       </>}
 
       {page === 'track' && <section className="container inner-page"><div className="inner-hero"><span className="section-index">متابعة التسجيل</span><h1>أين وصل طلبك؟</h1><p>أدخل رمز التتبع الخاص بك فقط. هذا الرمز فريد ويكفي لمعرفة حالة الطلب؛ لا تحتاج إلى الرقم الجامعي.</p></div><div className="track-layout"><form className="panel track-panel" onSubmit={handleTrack}><label className="field"><span>رمز التتبع <b>*</b></span><div className="input-wrap"><span className="input-icon">⌘</span><input required value={trackingCode} onChange={(e) => setTrackingCode(e.target.value.toUpperCase())} placeholder="LAT- ثم الرمز الطويل" autoCapitalize="characters" /></div></label><button className="primary-button" disabled={trackingBusy}><span>{trackingBusy ? 'جارٍ البحث…' : 'عرض حالة الطلب'}</span><span className="button-arrow">←</span></button><p className="form-footnote">احتفظ برمز التتبع ولا تشاركه إلا مع فريق التنظيم. لا يمكن تتبع الطلب برقم جامعي وحده.</p></form>
-          {trackingResult ? <div className="panel track-result"><div className="result-header"><span className="section-index">نتيجة الاستعلام</span><span className={`status-badge ${STATUS[trackingResult.status]?.className || 'pending'}`}>{STATUS[trackingResult.status]?.label || trackingResult.status}</span></div><h2>{trackingResult.full_name}</h2><div className="result-code"><span>رمز التتبع</span><strong dir="ltr">{trackingResult.tracking_code}</strong></div><div className="result-meta"><div><span>تاريخ التقديم</span><strong>{humanDate(trackingResult.created_at)}</strong></div><div><span>المبلغ المسجل</span><strong>{fmt(trackingResult.amount_syp)} ل.س</strong></div><div><span>الكلية أو المعهد</span><strong>{trackingResult.department}</strong></div><div><span>الاختصاص</span><strong>{trackingResult.specialization}</strong></div></div>{trackingResult.status === 'awaiting_payment' && <><div className="important-warning"><strong>الطلب بانتظار الفاتورة</strong><p>أتمم التحويل مع كتابة رمز التتبع في الملاحظات، ثم ارفع فاتورة PDF هنا.</p></div><form className="track-receipt-form" onSubmit={handleTrackReceiptUpload}><label className="field"><span>فاتورة التحويل PDF <b>*</b></span><input type="file" accept="application/pdf,.pdf" onChange={(e) => setTrackReceipt(e.target.files?.[0] || null)} required /></label><button className="primary-button" disabled={trackReceiptBusy || !trackReceipt}><span>{trackReceiptBusy ? 'جارٍ الرفع…' : 'رفع الفاتورة'}</span></button></form></>}{trackingResult.status === 'pending' && <p className="result-message">تم استلام الفاتورة؛ طلبك قيد المراجعة من قبل فريق التنظيم.</p>}{trackingResult.status === 'approved' && <><ApprovalCelebration name={trackingResult.full_name} /><TicketGallery tickets={trackingResult.tickets || []} application={trackingResult} /></>}{trackingResult.status === 'rejected' && <div className="rejection-message"><strong>سبب الرفض</strong><p>{trackingResult.rejection_reason || 'يرجى التواصل مع فريق التنظيم لمعرفة التفاصيل.'}</p></div>}</div> : <div className="track-help"><div className="big-lock">⌑</div><h3>بياناتك محمية</h3><p>لا يظهر طلبك إلا لمن يمتلك رمز التتبع الفريد.</p></div>}
+          {trackingResult ? <div className="panel track-result"><div className="result-header"><span className="section-index">نتيجة الاستعلام</span><span className={`status-badge ${STATUS[trackingResult.status]?.className || 'pending'}`}>{STATUS[trackingResult.status]?.label || trackingResult.status}</span></div><h2>{trackingResult.full_name}</h2><div className="result-code"><span>رمز التتبع</span><strong dir="ltr">{trackingResult.tracking_code}</strong></div><div className="result-meta"><div><span>تاريخ التقديم</span><strong>{humanDate(trackingResult.created_at)}</strong></div><div><span>المبلغ المسجل</span><strong>{fmt(trackingResult.amount_syp)} ل.س</strong></div><div><span>الكلية أو المعهد</span><strong>{trackingResult.department}</strong></div><div><span>الاختصاص</span><strong>{trackingResult.specialization}</strong></div></div>{trackingResult.status === 'awaiting_payment' && <><div className="important-warning"><strong>الطلب بانتظار الفاتورة</strong><p>أتمم التحويل مع كتابة رمز التتبع في الملاحظات، ثم ارفع فاتورة PDF هنا.</p></div><form className="track-receipt-form" onSubmit={handleTrackReceiptUpload}><label className="field"><span>فاتورة التحويل PDF <b>*</b></span><input type="file" accept="application/pdf,.pdf" onChange={(e) => setTrackReceipt(e.target.files?.[0] || null)} required /></label><button className="primary-button" disabled={trackReceiptBusy || !trackReceipt}><span>{trackReceiptBusy ? 'جارٍ الرفع…' : 'رفع الفاتورة'}</span></button></form></>}{trackingResult.status === 'pending' && <p className="result-message">تم استلام الفاتورة؛ طلبك قيد المراجعة من قبل فريق التنظيم.</p>}{trackingResult.status === 'approved' && <><ApprovalCelebration name={trackingResult.full_name} /><TicketGallery tickets={trackingResult.tickets || []} application={trackingResult} batchName={settings.batch_name || DEFAULT_SETTINGS.batch_name} /></>}{trackingResult.status === 'rejected' && <div className="rejection-message"><strong>سبب الرفض</strong><p>{trackingResult.rejection_reason || 'يرجى التواصل مع فريق التنظيم لمعرفة التفاصيل.'}</p></div>}</div> : <div className="track-help"><div className="big-lock">⌑</div><h3>بياناتك محمية</h3><p>لا يظهر طلبك إلا لمن يمتلك رمز التتبع الفريد.</p></div>}
         </div></section>}
 
       {page === 'verify' && <section className="container inner-page ticket-verification-page"><div className="inner-hero"><span className="section-index">التحقق من بطاقة الدخول</span><h1>بوابة التحقق لحفل التخرج</h1><p>تحقق من صلاحية البطاقة ونوعها قبل السماح بالدخول.</p></div>{ticketVerifyBusy && <div className="panel verification-state"><div className="verification-spinner" /><h2>جارٍ التحقق من رمز QR…</h2></div>}{!ticketVerifyBusy && ticketVerifyError && <div className="panel verification-state invalid-ticket"><div className="verification-symbol">×</div><h2>تعذّر التحقق من البطاقة</h2><p>{ticketVerifyError}</p></div>}{!ticketVerifyBusy && ticketVerification?.valid && <VerifiedTicket verification={ticketVerification} />}</section>}
 
-      {page === 'staff' && <section className="container inner-page staff-page"><div className="inner-hero"><span className="section-index">للاستخدام الداخلي</span><h1>بوابة فريق التنظيم</h1><p>تسجيل الدخول مخصص للأشخاص الذين أضافهم مدير النظام إلى فريق مراجعة الطلبات.</p></div><div className="staff-login-layout"><div className="panel staff-login-card"><div className="staff-login-mark">⌑</div><h2>تسجيل دخول الفريق</h2><p>استخدم بيانات الحساب المصرّح به من مدير النظام.</p><form onSubmit={handleLogin}><label className="field"><span>البريد الإلكتروني</span><div className="input-wrap"><span className="input-icon">✉</span><input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" placeholder="name@example.com" /></div></label><label className="field"><span>كلمة المرور</span><div className="input-wrap"><span className="input-icon">⌑</span><input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" placeholder="أدخل كلمة المرور" /></div></label><button className="primary-button" disabled={authChecking || !isConfigured}><span>{authChecking ? 'جارٍ التحقق…' : 'تسجيل الدخول'}</span><span className="button-arrow">←</span></button>{!isConfigured && <small className="muted-line">إعداد قاعدة البيانات مطلوب قبل تسجيل الدخول.</small>}</form></div><div className="staff-login-info"><span className="section-index">صلاحيات المراجعة</span><h2>كل الطلبات في مكان واحد.</h2><p>بعد تسجيل الدخول، يمكن للفريق الاطلاع على الطلبات وإيصالات الدفع، ثم الموافقة أو الرفض مع تدوين السبب. يستطيع المدير وحده تعديل الرسوم وقوائم الكليات والاختصاصات.</p><div className="staff-feature"><span>✓</span><div><strong>مراجعة الإيصالات</strong><small>فتح ملف PDF من مساحة تخزين خاصة</small></div></div><div className="staff-feature"><span>✓</span><div><strong>توثيق القرار</strong><small>تسجيل الموافقة أو سبب الرفض وتاريخ المراجعة</small></div></div><div className="staff-feature"><span>✓</span><div><strong>إدارة قوائم التسجيل</strong><small>الكليات والمعاهد والاختصاصات وحدود المواد المحمولة</small></div></div></div></div></section>}
+      {page === 'staff' && <section className="container inner-page staff-page"><div className="inner-hero"><span className="section-index">للاستخدام الداخلي</span><h1>بوابة فريق التنظيم</h1><p>صفحة داخلية غير ظاهرة في قائمة الموقع العامة. الدخول مخصص للحسابات التي أنشأها مدير النظام فقط.</p></div><div className="staff-login-layout"><div className="panel staff-login-card"><div className="staff-login-mark">⌑</div><h2>تسجيل دخول الفريق</h2><p>استخدم بيانات الحساب المصرّح به من مدير النظام.</p><form onSubmit={handleLogin}><label className="field"><span>البريد الإلكتروني</span><div className="input-wrap"><span className="input-icon">✉</span><input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" placeholder="name@example.com" /></div></label><label className="field"><span>كلمة المرور</span><div className="input-wrap"><span className="input-icon">⌑</span><input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" placeholder="أدخل كلمة المرور" /></div></label><button className="primary-button" disabled={authChecking || !isConfigured}><span>{authChecking ? 'جارٍ التحقق…' : 'تسجيل الدخول'}</span><span className="button-arrow">←</span></button>{!isConfigured && <small className="muted-line">إعداد قاعدة البيانات مطلوب قبل تسجيل الدخول.</small>}</form></div><div className="staff-login-info"><span className="section-index">صلاحيات المراجعة</span><h2>الطلبات المصرح بها فقط.</h2><p>تُحدد صلاحية كل حساب حسب الكليات والاختصاصات المسموح له بمراجعتها. لا يكفي إخفاء رابط الدخول وحده لحماية البيانات؛ يتم تطبيق الصلاحيات من قاعدة البيانات. يستطيع المدير وحده تعديل الرسوم وقوائم الكليات والاختصاصات.</p><div className="staff-feature"><span>✓</span><div><strong>مراجعة الإيصالات</strong><small>فتح ملف PDF من مساحة تخزين خاصة</small></div></div><div className="staff-feature"><span>✓</span><div><strong>توثيق القرار</strong><small>تسجيل الموافقة أو سبب الرفض وتاريخ المراجعة</small></div></div><div className="staff-feature"><span>✓</span><div><strong>إدارة قوائم التسجيل</strong><small>الكليات والمعاهد والاختصاصات وحدود المواد المحمولة</small></div></div></div></div></section>}
 
+      {page === 'staff-password' && staffUser && <section className="container inner-page staff-page"><div className="inner-hero"><span className="section-index">خطوة أمان مطلوبة</span><h1>غيّر كلمة المرور المؤقتة</h1><p>يجب تعيين كلمة مرور شخصية قبل استخدام لوحة فريق التنظيم. استخدم كلمة مرور طويلة وفريدة ولا تشاركها مع أحد.</p></div><div className="staff-login-layout"><form className="panel staff-login-card" onSubmit={handleForcedPasswordChange}><h2>كلمة مرور جديدة</h2><label className="field"><span>كلمة المرور الجديدة</span><input type="password" required minLength={12} autoComplete="new-password" value={newStaffPassword} onChange={(e) => setNewStaffPassword(e.target.value)} placeholder="12 محرفاً على الأقل" /></label><label className="field"><span>تأكيد كلمة المرور</span><input type="password" required minLength={12} autoComplete="new-password" value={confirmStaffPassword} onChange={(e) => setConfirmStaffPassword(e.target.value)} placeholder="أعد كتابة كلمة المرور" /></label><button className="primary-button" disabled={authChecking}><span>{authChecking ? 'جارٍ الحفظ…' : 'حفظ كلمة المرور والمتابعة'}</span></button><button type="button" className="secondary-button" onClick={signOut}>تسجيل الخروج</button></form></div></section>}
       {page === 'admin' && staffUser && <AdminDashboard staffUser={staffUser} staffRole={staffRole} settings={settings} setSettings={setSettings} refreshSettings={loadSettings} catalog={catalog} catalogError={catalogError} refreshCatalog={loadCatalog} notify={notify} onSignOut={signOut} />}
     </main>
 
-    <footer className="site-footer"><div className="container footer-inner"><div className="footer-brand"><img className="brand-logo small-brand-logo" src="/brand/ssu-emblem.png" alt="" /><div><strong>{settings.organizer || DEFAULT_SETTINGS.organizer}</strong><span>{settings.university_label || DEFAULT_SETTINGS.university_label}</span></div></div><p>منصة التسجيل لحفلات التخرج · دفعة 2026 · {new Date().getFullYear()}</p><span className="footer-status"><i className="dot" /> نظام التسجيل والمتابعة</span></div></footer>
+    <footer className="site-footer"><div className="container footer-inner"><div className="footer-brand"><img className="brand-logo small-brand-logo" src="/brand/ssu-emblem.png" alt="" /><div><strong>{settings.organizer || DEFAULT_SETTINGS.organizer}</strong><span>{settings.university_label || DEFAULT_SETTINGS.university_label}</span></div></div><p>منصة التسجيل لحفلات التخرج · {settings.batch_name || DEFAULT_SETTINGS.batch_name} · {new Date().getFullYear()}</p><span className="footer-status"><i className="dot" /> نظام التسجيل والمتابعة</span></div></footer>
 
     {toast && <div className={`toast toast-${toast.kind}`} role="status"><span>{toast.kind === 'error' ? '!' : toast.kind === 'success' ? '✓' : 'i'}</span>{toast.message}<button onClick={() => setToast(null)} aria-label="إغلاق">×</button></div>}
   </div>;
@@ -419,16 +466,16 @@ function ApprovalCelebration({ name }) {
   </section>;
 }
 
-function TicketGallery({ tickets, application }) {
+function TicketGallery({ tickets, application, batchName }) {
   if (!tickets.length) return <div className="ticket-loading-note"><strong>تم قبول الطلب</strong><p>يجري تجهيز بطاقات الدخول. حدّث حالة الطلب بعد لحظات إن لم تظهر البطاقات.</p></div>;
   return <section className="ticket-gallery" id="entry-tickets">
     <div className="ticket-gallery-heading"><div><span className="section-index">بطاقات الدخول</span><h3>بطاقاتك جاهزة للحفظ أو الطباعة</h3><p>توجد بطاقة مستقلة للخريج ولكل مرافق. كل رمز QR يُتحقق منه بشكل منفصل.</p></div><button type="button" className="secondary-button ticket-print-button" onClick={() => window.print()}>طباعة البطاقات</button></div>
-    <div className="ticket-cards-grid">{tickets.map((ticket) => <EntryTicketCard key={ticket.ticket_token} ticket={ticket} application={application} />)}</div>
+    <div className="ticket-cards-grid">{tickets.map((ticket) => <EntryTicketCard key={ticket.ticket_token} ticket={ticket} application={application} batchName={batchName} />)}</div>
     <p className="ticket-privacy-note">لا تنشر صور البطاقات أو رموز QR على مواقع التواصل؛ كل رمز مخصص لدخول شخص واحد.</p>
   </section>;
 }
 
-function EntryTicketCard({ ticket, application }) {
+function EntryTicketCard({ ticket, application, batchName }) {
   const [qrData, setQrData] = useState('');
   const verifyUrl = `${window.location.origin}/?ticket=${encodeURIComponent(ticket.ticket_token)}`;
   useEffect(() => {
@@ -440,7 +487,7 @@ function EntryTicketCard({ ticket, application }) {
   }, [verifyUrl]);
   const isGraduate = ticket.ticket_type === 'graduate' || ticket.ticket_number === 0;
   return <article className={`entry-ticket-card ${isGraduate ? 'graduate-ticket' : 'companion-ticket'}`}>
-    <div className="entry-ticket-topline"><img src="/brand/ssu-emblem.png" alt="" /><div><strong>اتحاد طلبة سوريا</strong><span>فرع محافظة اللاذقية · دفعة 2026</span></div></div>
+    <div className="entry-ticket-topline"><img src="/brand/ssu-emblem.png" alt="" /><div><strong>اتحاد طلبة سوريا</strong><span>فرع محافظة اللاذقية · {batchName || 'دفعة 2026'}</span></div></div>
     <div className="ticket-card-title"><span>{isGraduate ? 'بطاقة دخول الخريج' : `بطاقة دخول المرافق ${ticket.ticket_number}`}</span><strong>{isGraduate ? '🎓' : '🎟️'}</strong></div>
     <h4>{application.full_name}</h4>
     <p className="ticket-program">{application.department || '—'}{application.specialization && application.specialization !== 'لا يوجد اختصاص' ? ` · ${application.specialization}` : ''}</p>
@@ -471,11 +518,187 @@ function VerifiedTicket({ verification }) {
   </div>;
 }
 
+function StaffManagementPanel({ staffUser, catalog, notify }) {
+  const [members, setMembers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [email, setEmail] = useState('');
+  const [newRole, setNewRole] = useState('reviewer');
+  const [newScopes, setNewScopes] = useState([]);
+  const [editor, setEditor] = useState(null);
+  const [credentials, setCredentials] = useState(null);
+  const units = catalog.units || [];
+  const specs = catalog.specializations || [];
+
+  const callStaff = useCallback(async (payload) => {
+    const { data, error } = await supabase.functions.invoke('manage-staff', { body: payload });
+    if (error) {
+      let detail = null;
+      try {
+        if (error.context && typeof error.context.json === 'function') detail = await error.context.json();
+      } catch { /* the response body may already have been consumed */ }
+      throw new Error(detail?.error || error.message || 'تعذر تنفيذ عملية إدارة الفريق.');
+    }
+    if (data?.error) throw new Error(data.error);
+    return data;
+  }, []);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await callStaff({ action: 'list' });
+      setMembers(data.members || []);
+    } catch (error) {
+      notify(error.message || 'تعذر تحميل حسابات الفريق.', 'error');
+    } finally { setLoading(false); }
+  }, [callStaff, notify]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  function toAssignments(tokens) {
+    const result = [];
+    for (const token of tokens) {
+      if (token.startsWith('unit:')) result.push({ academic_unit_id: token.slice(5), academic_specialization_id: null });
+      if (token.startsWith('spec:')) {
+        const spec = specs.find((item) => item.id === token.slice(5));
+        if (spec) result.push({ academic_unit_id: spec.unit_id, academic_specialization_id: spec.id });
+      }
+    }
+    const unitIds = new Set(result.filter((item) => !item.academic_specialization_id).map((item) => item.academic_unit_id));
+    return result.filter((item) => !item.academic_specialization_id || !unitIds.has(item.academic_unit_id));
+  }
+
+  function tokensFromAssignments(assignments) {
+    return (assignments || []).map((item) => item.academic_specialization_id ? `spec:${item.academic_specialization_id}` : `unit:${item.academic_unit_id}`);
+  }
+
+  function toggleToken(tokens, setTokens, token, checked, unitId = null) {
+    setTokens((current) => {
+      let next = current.filter((item) => item !== token);
+      if (checked) next.push(token);
+      if (token.startsWith('unit:')) {
+        const targetUnit = token.slice(5);
+        const children = specs.filter((spec) => spec.unit_id === targetUnit).map((spec) => `spec:${spec.id}`);
+        next = next.filter((item) => !children.includes(item));
+      } else if (token.startsWith('spec:') && checked && unitId) {
+        next = next.filter((item) => item !== `unit:${unitId}`);
+      }
+      return [...new Set(next)];
+    });
+  }
+
+  function renderScopePicker(tokens, setTokens, prefix) {
+    return <div className="staff-scope-picker">{units.length === 0 ? <p className="muted-line">أضف الكليات والاختصاصات أولًا من تبويب «الكليات والاختصاصات».</p> : units.map((unit) => {
+      const unitToken = `unit:${unit.id}`;
+      const chosenWholeUnit = tokens.includes(unitToken);
+      const unitSpecs = specs.filter((spec) => spec.unit_id === unit.id);
+      return <div className="staff-scope-unit" key={`${prefix}-${unit.id}`}>
+        <label className="staff-scope-check"><input type="checkbox" checked={chosenWholeUnit} onChange={(e) => toggleToken(tokens, setTokens, unitToken, e.target.checked)} /><span><strong>{unit.unit_type === 'institute' ? 'معهد' : 'كلية'}: {unit.name}</strong><small>تحديد الجهة كاملة يمنح الوصول لكل اختصاصاتها.</small></span></label>
+        {unitSpecs.length > 0 && <div className="staff-scope-specs">{unitSpecs.map((spec) => <label key={spec.id} className="staff-scope-check staff-scope-child"><input type="checkbox" disabled={chosenWholeUnit} checked={tokens.includes(`spec:${spec.id}`)} onChange={(e) => toggleToken(tokens, setTokens, `spec:${spec.id}`, e.target.checked, unit.id)} /><span>{spec.name}</span></label>)}</div>}
+      </div>;
+    })}</div>;
+  }
+
+  function scopeLabels(assignments) {
+    if (!assignments?.length) return 'لا توجد جهات محددة';
+    return assignments.map((assignment) => {
+      const unit = units.find((item) => item.id === assignment.academic_unit_id);
+      const spec = specs.find((item) => item.id === assignment.academic_specialization_id);
+      return unit ? `${unit.name}${spec ? ` — ${spec.name}` : ' (كل الاختصاصات)'}` : 'جهة غير موجودة';
+    }).join('، ');
+  }
+
+  async function createStaff(event) {
+    event.preventDefault();
+    if (!email.trim()) return notify('أدخل البريد الإلكتروني للموظف.', 'error');
+    const assignments = newRole === 'reviewer' ? toAssignments(newScopes) : [];
+    if (newRole === 'reviewer' && assignments.length === 0) return notify('حدد كلية أو اختصاصًا واحدًا على الأقل للمراجع.', 'error');
+    setBusy(true); setCredentials(null);
+    try {
+      const result = await callStaff({ action: 'create', email: email.trim().toLowerCase(), role: newRole, assignments });
+      setCredentials({ email: result.email, password: result.temporary_password });
+      setEmail(''); setNewScopes([]); setNewRole('reviewer');
+      notify('تم إنشاء حساب الفريق. انسخ كلمة المرور المؤقتة الآن واحفظها بأمان.', 'success');
+      await refresh();
+    } catch (error) { notify(error.message || 'تعذر إنشاء الحساب.', 'error'); }
+    finally { setBusy(false); }
+  }
+
+  function startEdit(member) {
+    setEditor({ user_id: member.user_id, email: member.email, role: member.role, scopes: tokensFromAssignments(member.assignments) });
+    setCredentials(null);
+  }
+
+  async function saveEdit() {
+    if (!editor) return;
+    const assignments = editor.role === 'reviewer' ? toAssignments(editor.scopes) : [];
+    if (editor.role === 'reviewer' && assignments.length === 0) return notify('المراجع يحتاج إلى كلية أو اختصاص واحد على الأقل.', 'error');
+    setBusy(true);
+    try {
+      await callStaff({ action: 'update', staff_id: editor.user_id, role: editor.role, assignments });
+      notify('تم تحديث الدور وصلاحيات الوصول.', 'success'); setEditor(null); await refresh();
+    } catch (error) { notify(error.message || 'تعذر تحديث الصلاحيات.', 'error'); }
+    finally { setBusy(false); }
+  }
+
+  async function removeStaff(member) {
+    if (member.user_id === staffUser.id) return notify('لا يمكنك حذف حسابك الحالي من هذه الشاشة.', 'error');
+    if (!window.confirm(`هل تريد حذف حساب ${member.email} من فريق التنظيم؟ سيُمنع من تسجيل الدخول.`)) return;
+    setBusy(true);
+    try { await callStaff({ action: 'delete', staff_id: member.user_id }); notify('تم حذف حساب الفريق.', 'success'); await refresh(); }
+    catch (error) { notify(error.message || 'تعذر حذف الحساب.', 'error'); }
+    finally { setBusy(false); }
+  }
+
+  async function resetPassword(member) {
+    if (!window.confirm(`إنشاء كلمة مرور مؤقتة جديدة للحساب ${member.email}؟ ستتوقف كلمة المرور القديمة عن العمل.`)) return;
+    setBusy(true); setCredentials(null);
+    try {
+      const result = await callStaff({ action: 'reset_password', staff_id: member.user_id });
+      setCredentials({ email: member.email, password: result.temporary_password });
+      notify('تم إنشاء كلمة مرور جديدة. انسخها الآن وسلّمها للموظف عبر قناة آمنة.', 'success');
+    } catch (error) { notify(error.message || 'تعذر إعادة تعيين كلمة المرور.', 'error'); }
+    finally { setBusy(false); }
+  }
+
+  async function copyPassword() {
+    if (!credentials?.password) return;
+    try { await navigator.clipboard.writeText(credentials.password); notify('تم نسخ كلمة المرور المؤقتة.', 'success'); }
+    catch { notify('تعذر النسخ الآلي؛ حدّد كلمة المرور وانسخها يدويًا.', 'info'); }
+  }
+
+  return <div className="panel settings-panel staff-management-panel">
+    <div className="settings-header"><div><span className="section-index">أمان وصلاحيات</span><h2>حسابات فريق التنظيم</h2><p>أنشئ حسابًا لكل عضو، ثم حدّد له كلية كاملة أو اختصاصات محددة. صلاحيات الوصول تُفرض في قاعدة البيانات، وليست مجرد إخفاء للعناصر في الواجهة.</p></div><button type="button" className="secondary-button" onClick={refresh} disabled={loading || busy}>تحديث الحسابات ↻</button></div>
+    {credentials && <div className="temporary-credential-box"><strong>كلمة المرور المؤقتة للحساب: {credentials.email}</strong><p>تُعرض هنا بعد الإنشاء أو إعادة التعيين فقط. انسخها واحفظها في مكان آمن؛ لن نخزنها أو نعرضها ثانية.</p><code dir="ltr">{credentials.password}</code><button type="button" className="secondary-button" onClick={copyPassword}>نسخ كلمة المرور</button><button type="button" className="text-delete" onClick={() => setCredentials(null)}>إخفاء</button></div>}
+    <form className="staff-create-form" onSubmit={createStaff}>
+      <h3>إنشاء حساب جديد</h3>
+      <div className="staff-form-grid"><label className="field"><span>البريد الإلكتروني</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="off" placeholder="reviewer@example.com" /></label><label className="field"><span>الدور</span><select value={newRole} onChange={(e) => setNewRole(e.target.value)}><option value="reviewer">مراجع / عضو فريق</option><option value="admin">مدير آخر</option></select></label></div>
+      {newRole === 'reviewer' && <><div className="field"><span>الكليات والاختصاصات التي يمكنه الوصول إليها</span>{renderScopePicker(newScopes, setNewScopes, 'create')}</div><small className="muted-line">إن اخترت الكلية كاملة، فلا حاجة إلى اختيار اختصاصاتها منفردة. يمكن تحديد عدة جهات واختصاصات.</small></>}
+      <button className="primary-button" disabled={busy || loading}><span>{busy ? 'جارٍ التنفيذ…' : 'إنشاء حساب وإصدار كلمة مرور مؤقتة'}</span></button>
+    </form>
+    <div className="staff-list-heading"><h3>أعضاء الفريق الحاليون</h3><span>{members.length} حساب</span></div>
+    {loading ? <div className="empty-state">جارٍ تحميل حسابات الفريق…</div> : members.length === 0 ? <div className="empty-state">لا توجد حسابات فريق في نتيجة الاستعلام.</div> : <div className="staff-member-list">{members.map((member) => <article className="staff-member-card" key={member.user_id}>
+      <div className="staff-member-head"><div><strong>{member.email || member.user_id}</strong><span className={`status-badge ${member.role === 'admin' ? 'approved' : 'pending'}`}>{member.role === 'admin' ? 'مدير' : 'مراجع'}</span></div><small>{member.user_id === staffUser.id ? 'حسابك الحالي' : `أُنشئ في ${humanDate(member.created_at)}`}</small></div>
+      <p className="staff-scope-summary">{member.role === 'admin' ? 'صلاحية كاملة على المنصة.' : scopeLabels(member.assignments)}</p>
+      <div className="staff-member-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => startEdit(member)}>تعديل الدور والصلاحيات</button><button type="button" className="secondary-button" disabled={busy} onClick={() => resetPassword(member)}>إعادة تعيين كلمة المرور</button>{member.user_id !== staffUser.id && <button type="button" className="reject-button" disabled={busy} onClick={() => removeStaff(member)}>حذف الحساب</button>}</div>
+      {editor?.user_id === member.user_id && <div className="staff-editor"><h4>تعديل صلاحيات {member.email}</h4><label className="field"><span>الدور</span><select value={editor.role} onChange={(e) => setEditor((old) => ({ ...old, role: e.target.value }))}><option value="reviewer">مراجع / عضو فريق</option><option value="admin">مدير</option></select></label>{editor.role === 'reviewer' && <div className="field"><span>نطاق الوصول</span>{renderScopePicker(editor.scopes, (updater) => setEditor((old) => ({ ...old, scopes: typeof updater === 'function' ? updater(old.scopes) : updater })), `edit-${member.user_id}`)}</div>}<div className="staff-member-actions"><button type="button" className="primary-button" disabled={busy} onClick={saveEdit}>حفظ الصلاحيات</button><button type="button" className="secondary-button" disabled={busy} onClick={() => setEditor(null)}>إلغاء</button></div></div>}
+    </article>)}</div>}
+  </div>;
+}
+
 function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSettings, catalog, catalogError, refreshCatalog, notify, onSignOut }) {
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('all');
   const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [unitFilter, setUnitFilter] = useState('all');
+  const [specializationFilter, setSpecializationFilter] = useState('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [pageNumber, setPageNumber] = useState(0);
+  const [totalFiltered, setTotalFiltered] = useState(0);
+  const pageSize = 50;
   const [selected, setSelected] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
   const [savingDecision, setSavingDecision] = useState(false);
@@ -490,25 +713,57 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
   const isAdmin = staffRole === 'admin';
 
   useEffect(() => setLocalSettings({ ...DEFAULT_SETTINGS, ...settings, payment_images: Array.isArray(settings.payment_images) ? settings.payment_images : [] }), [settings]);
-  useEffect(() => { if (!isAdmin && (tab === 'settings' || tab === 'academic')) setTab('applications'); }, [isAdmin, tab]);
+  useEffect(() => { if (!isAdmin && (tab === 'settings' || tab === 'academic' || tab === 'team')) setTab('applications'); }, [isAdmin, tab]);
+
+  const applyApplicationFilters = useCallback((query) => {
+    let next = query;
+    if (statusFilter !== 'all') next = next.eq('status', statusFilter);
+    if (unitFilter !== 'all') next = next.eq('academic_unit_id', unitFilter);
+    if (specializationFilter !== 'all') next = next.eq('academic_specialization_id', specializationFilter);
+    if (fromDate) {
+      const startDate = new Date(`${fromDate}T00:00:00`);
+      if (!Number.isNaN(startDate.getTime())) next = next.gte('created_at', startDate.toISOString());
+    }
+    if (toDate) {
+      const endDate = new Date(`${toDate}T00:00:00`);
+      if (!Number.isNaN(endDate.getTime())) { endDate.setDate(endDate.getDate() + 1); next = next.lt('created_at', endDate.toISOString()); }
+    }
+    const term = search.trim().replace(/[%,()\\."'`;:*]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (term) {
+      const pattern = `%${term}%`;
+      next = next.or(`full_name.ilike.${pattern},university_number.ilike.${pattern},phone_number.ilike.${pattern},tracking_code.ilike.${pattern},department.ilike.${pattern},specialization.ilike.${pattern}`);
+    }
+    return next;
+  }, [statusFilter, unitFilter, specializationFilter, fromDate, toDate, search]);
 
   const loadApplications = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase.from('applications').select('*').order('created_at', { ascending: false }).limit(500);
+    let query = applyApplicationFilters(supabase.from('applications'));
+    const { data, error, count } = await query.select('*', { count: 'exact' }).order('created_at', { ascending: false }).range(pageNumber * pageSize, pageNumber * pageSize + pageSize - 1);
     if (error) notify('تعذر تحميل الطلبات: ' + error.message, 'error');
-    setApplications(data || []); setLoading(false);
-  }, [notify]);
+    setApplications(data || []); setTotalFiltered(count || 0); setLoading(false);
+  }, [applyApplicationFilters, notify, pageNumber]);
   useEffect(() => { loadApplications(); }, [loadApplications]);
   useEffect(() => { if (selected) setSelected(applications.find((item) => item.id === selected.id) || selected); }, [applications]);
 
-  const filtered = applications.filter((item) => {
-    const term = search.trim().toLowerCase();
-    const matchesStatus = statusFilter === 'all' || item.status === statusFilter;
-    const matchesSearch = !term || [item.full_name, item.university_number, item.phone_number, item.tracking_code, item.department, item.specialization].some((v) => String(v || '').toLowerCase().includes(term));
-    return matchesStatus && matchesSearch;
-  });
+  async function fetchAllFilteredApplications() {
+    const all = [];
+    let offset = 0;
+    const chunkSize = 1000;
+    while (true) {
+      const query = applyApplicationFilters(supabase.from('applications'));
+      const { data, error } = await query.select('*').order('created_at', { ascending: false }).range(offset, offset + chunkSize - 1);
+      if (error) throw new Error('تعذر تحميل كامل النتائج للتصدير: ' + error.message);
+      all.push(...(data || []));
+      if (!data || data.length < chunkSize) break;
+      offset += chunkSize;
+    }
+    return all;
+  }
+
+  const filtered = applications;
   const counts = {
-    all: applications.length,
+    all: totalFiltered,
     awaiting_payment: applications.filter((a) => a.status === 'awaiting_payment').length,
     pending: applications.filter((a) => a.status === 'pending').length,
     approved: applications.filter((a) => a.status === 'approved').length,
@@ -527,6 +782,7 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
   }
 
   async function openReceipt() {
+    if (!selected?.receipt_path && selected?.receipt_archive_path) return notify(`تمت أرشفة الفاتورة خارج التخزين السحابي في: ${selected.receipt_archive_path}. للوصول إليها، استخدم وحدة الأرشيف المؤمّنة.`, 'info');
     if (!selected?.receipt_path) return notify('لم يرفع الطالب الفاتورة بعد.', 'info');
     const { data, error } = await supabase.storage.from('receipts').createSignedUrl(selected.receipt_path, 300);
     if (error) return notify('تعذر فتح الفاتورة: ' + error.message, 'error');
@@ -540,6 +796,7 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
     setSavingSettings(true);
     const dataToSave = {
       event_title: localSettings.event_title.trim(),
+      batch_name: String(localSettings.batch_name || '').trim() || 'دفعة 2026',
       university_label: localSettings.university_label.trim(),
       organizer: localSettings.organizer.trim(),
       registration_open: Boolean(localSettings.registration_open),
@@ -635,28 +892,79 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
     notify('تم حذف الاختصاص من القائمة.', 'success'); await refreshCatalog();
   }
 
-  function exportCsv() {
-    const cols = ['tracking_code', 'full_name', 'university_number', 'phone_number', 'carried_subjects', 'department', 'specialization', 'companions', 'amount_syp', 'status', 'rejection_reason', 'created_at'];
-    const escape = (v) => `"${String(v ?? '').replaceAll('"', '""')}"`;
-    const csv = '\uFEFF' + [cols.join(','), ...filtered.map((row) => cols.map((col) => escape(row[col])).join(','))].join('\r\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
-    const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'graduation-applications.csv'; anchor.click(); URL.revokeObjectURL(url);
+  const exportColumns = [
+    ['full_name', 'اسم الخريج'], ['university_number', 'الرقم الجامعي'], ['phone_number', 'رقم الهاتف'],
+    ['department', 'الكلية أو المعهد'], ['specialization', 'الاختصاص'], ['carried_subjects', 'المواد المحمولة'],
+    ['companions', 'عدد المرافقين'], ['amount_syp', 'المبلغ ل.س'], ['status', 'حالة الطلب'],
+    ['tracking_code', 'رمز التتبع'], ['created_at', 'تاريخ التسجيل'],
+  ];
+  const statusArabic = (status) => STATUS[status]?.label || status || '';
+  const csvEscape = (value) => {
+    let raw = String(value ?? '');
+    if (/^[=+@\-\t\r]/.test(raw)) raw = `'${raw}`; // protect spreadsheet users from formula injection
+    return `"${raw.replaceAll('"', '""')}"`;
+  };
+  const downloadBlob = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a'); anchor.href = url; anchor.download = filename; anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+  };
+
+  async function exportCsv() {
+    notify('جارٍ تجهيز جميع النتائج المطابقة للتصدير، وقد يستغرق ذلك بعض الوقت للبيانات الكبيرة.', 'info');
+    try {
+      const rows = await fetchAllFilteredApplications();
+      const csv = '\uFEFF' + [exportColumns.map(([, label]) => csvEscape(label)).join(','), ...rows.map((row) => exportColumns.map(([key]) => csvEscape(key === 'status' ? statusArabic(row[key]) : key === 'created_at' ? humanDate(row[key]) : row[key])).join(','))].join('\r\n');
+      downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `graduation-applications-${new Date().toISOString().slice(0, 10)}.csv`);
+      notify(`تم تصدير ${fmt(rows.length)} سجلًا. الملف CSV متوافق مع Excel ويفتح مباشرة فيه.`, 'success');
+    } catch (error) { notify(error.message || 'تعذر تصدير النتائج.', 'error'); }
+  }
+
+  async function exportPdf() {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return notify('يرجى السماح بالنوافذ المنبثقة لهذا الموقع حتى تتمكن من إنشاء تقرير PDF.', 'error');
+    printWindow.document.write('<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><title>تقرير بوابة التخرج</title><body style="font-family:Arial,sans-serif;padding:24px">جارٍ تجهيز التقرير…</body></html>');
+    try {
+      const rows = await fetchAllFilteredApplications();
+      if (rows.length > 5000 && !window.confirm(`التقرير يحتوي على ${fmt(rows.length)} سجلًا وقد ينتج PDF طويلًا. هل تريد المتابعة؟`)) { printWindow.close(); return; }
+      const esc = (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+      const body = rows.map((row, index) => `<tr><td>${index + 1}</td><td>${esc(row.full_name)}</td><td>${esc(row.university_number)}</td><td>${esc(row.department)}</td><td>${esc(row.specialization || 'لا يوجد اختصاص')}</td><td>${esc(row.companions ?? 0)}</td><td>${esc(statusArabic(row.status))}</td><td class="check"></td></tr>`).join('');
+      const selectedUnitName = (catalog.units || []).find((unit) => unit.id === unitFilter)?.name;
+      const selectedSpecName = (catalog.specializations || []).find((spec) => spec.id === specializationFilter)?.name;
+      const title = `قائمة تدقيق بوابة التخرج — ${settings.batch_name || DEFAULT_SETTINGS.batch_name}`;
+      printWindow.document.open();
+      printWindow.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>${esc(title)}</title><style>@page{size:A4 landscape;margin:12mm}body{font-family:Arial,Tahoma,sans-serif;color:#222}h1{font-size:20px;margin:0 0 8px}p{font-size:12px;margin:4px 0 12px}.meta{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px;font-size:11px}table{width:100%;border-collapse:collapse;font-size:10px}th,td{border:1px solid #999;padding:6px;text-align:right;vertical-align:top}th{background:#eee}.check{width:80px;height:22px}@media print{tr{break-inside:avoid}}</style></head><body><h1>${esc(title)}</h1><div class="meta"><span>عدد السجلات: ${esc(rows.length)}</span><span>الحالة: ${esc(statusFilter === 'all' ? 'كل الحالات' : statusArabic(statusFilter))}</span><span>الكلية/المعهد: ${esc(selectedUnitName || 'الكل')}</span><span>الاختصاص: ${esc(selectedSpecName || 'الكل')}</span><span>تاريخ التصدير: ${esc(new Date().toLocaleDateString('ar-SY'))}</span></div><table><thead><tr><th>#</th><th>اسم الخريج</th><th>الرقم الجامعي</th><th>الكلية/المعهد</th><th>الاختصاص</th><th>المرافقون</th><th>الحالة</th><th>تدقيق البوابة</th></tr></thead><tbody>${body}</tbody></table><script>window.onload=()=>setTimeout(()=>window.print(),300)</script></body></html>`);
+      printWindow.document.close();
+    } catch (error) { printWindow.close(); notify(error.message || 'تعذر إنشاء تقرير PDF.', 'error'); }
   }
 
   const units = catalog.units || [];
   const specs = catalog.specializations || [];
   return <section className="container admin-page">
     <div className="admin-welcome"><div><span className="section-index">لوحة إدارة التسجيل</span><h1>مرحباً بفريق التنظيم</h1><p>راجع الطلبات، تحقق من الفواتير، واضبط خيارات التسجيل بحسب الكليات والمعاهد.</p></div><button className="secondary-button" onClick={onSignOut}>تسجيل الخروج ↗</button></div>
-    <div className="admin-tabs"><button className={tab === 'applications' ? 'active' : ''} onClick={() => setTab('applications')}>الطلبات <span>{counts.pending}</span></button>{isAdmin && <><button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>الرسوم والدفع</button><button className={tab === 'academic' ? 'active' : ''} onClick={() => setTab('academic')}>الكليات والاختصاصات</button></>}</div>
+    <div className="admin-tabs"><button className={tab === 'applications' ? 'active' : ''} onClick={() => setTab('applications')}>الطلبات <span>{counts.pending}</span></button>{isAdmin && <><button className={tab === 'team' ? 'active' : ''} onClick={() => setTab('team')}>فريق التنظيم</button><button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>الرسوم والدفع</button><button className={tab === 'academic' ? 'active' : ''} onClick={() => setTab('academic')}>الكليات والاختصاصات</button></>}</div>
     {tab === 'applications' && <>
-      <div className="stats-grid admin-stats-five"><div className="stat-card"><span>إجمالي الطلبات</span><strong>{fmt(counts.all)}</strong><small>حتى آخر 500 طلب</small></div><div className="stat-card stat-pending"><span>بانتظار الفاتورة</span><strong>{fmt(counts.awaiting_payment)}</strong><small>أنشئت ولم ترفع الفاتورة</small></div><div className="stat-card stat-pending"><span>قيد التدقيق</span><strong>{fmt(counts.pending)}</strong><small>فاتورة مرفوعة</small></div><div className="stat-card stat-approved"><span>تمت الموافقة</span><strong>{fmt(counts.approved)}</strong><small>طلبات معتمدة</small></div><div className="stat-card stat-rejected"><span>مرفوضة</span><strong>{fmt(counts.rejected)}</strong><small>مع تسجيل السبب</small></div></div>
-      <div className="admin-workspace"><div className="panel applications-panel"><div className="applications-toolbar"><div><h2>طلبات التسجيل</h2><span>{filtered.length} نتيجة</span></div><button className="secondary-button export-button" onClick={exportCsv}>تصدير CSV ⇩</button></div><div className="filter-row"><div className="input-wrap search-wrap"><span className="input-icon">⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ابحث بالاسم أو الرقم أو الكود" /></div><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="تصفية حسب الحالة"><option value="all">كل الحالات</option><option value="awaiting_payment">بانتظار الفاتورة</option><option value="pending">قيد التدقيق</option><option value="approved">تمت الموافقة</option><option value="rejected">مرفوض</option></select><button className="refresh-button" onClick={loadApplications} title="تحديث">↻</button></div>
-        {loading ? <div className="empty-state">جارٍ تحميل الطلبات…</div> : filtered.length === 0 ? <div className="empty-state"><span>⌕</span><strong>لا توجد طلبات مطابقة</strong><p>ستظهر الطلبات هنا بعد إنشاء طلبات الطلاب.</p></div> : <div className="table-scroll"><table className="applications-table"><thead><tr><th>الطالب / الرمز</th><th>الكلية / الاختصاص</th><th>المبلغ</th><th>الحالة</th><th>التاريخ</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : ''} onClick={() => { setSelected(item); setRejectReason(item.rejection_reason || ''); setReceiptLink(''); }}><td><strong>{item.full_name}</strong><small>{item.tracking_code} · {item.university_number}</small><small>{item.phone_number || '—'}</small></td><td><span>{item.department}</span><small>{item.specialization}</small></td><td><strong>{fmt(item.amount_syp)} ل.س</strong><small>{fmt(item.companions)} مرافق · {fmt(item.carried_subjects)} مادة محمولة</small></td><td><span className={`status-badge ${STATUS[item.status]?.className || 'pending'}`}>{STATUS[item.status]?.label || item.status}</span></td><td>{humanDate(item.created_at)}</td></tr>)}</tbody></table></div>}
+      <div className="stats-grid admin-stats-five"><div className="stat-card"><span>إجمالي النتائج المطابقة</span><strong>{fmt(counts.all)}</strong><small>بحسب الفلاتر الحالية</small></div><div className="stat-card stat-pending"><span>بانتظار الفاتورة</span><strong>{fmt(counts.awaiting_payment)}</strong><small>في الصفحة المعروضة</small></div><div className="stat-card stat-pending"><span>قيد التدقيق</span><strong>{fmt(counts.pending)}</strong><small>في الصفحة المعروضة</small></div><div className="stat-card stat-approved"><span>تمت الموافقة</span><strong>{fmt(counts.approved)}</strong><small>في الصفحة المعروضة</small></div><div className="stat-card stat-rejected"><span>مرفوضة</span><strong>{fmt(counts.rejected)}</strong><small>في الصفحة المعروضة</small></div></div>
+      <div className="panel applications-panel">
+        <div className="applications-toolbar"><div><h2>طلبات التسجيل</h2><span>{fmt(totalFiltered)} نتيجة مطابقة</span></div><div className="export-actions"><button className="secondary-button export-button" onClick={exportCsv}>تصدير Excel (CSV) ⇩</button><button className="secondary-button export-button" onClick={exportPdf}>تقرير PDF / طباعة</button></div></div>
+        <div className="advanced-filter-grid">
+          <label className="field search-field"><span>بحث شامل</span><input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setPageNumber(0); setSearch(searchInput); } }} placeholder="الاسم أو الرقم أو الهاتف أو رمز التتبع" /></label>
+          <label className="field"><span>حالة الطلب</span><select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPageNumber(0); }}><option value="all">كل الحالات</option><option value="awaiting_payment">بانتظار الفاتورة</option><option value="pending">قيد التدقيق</option><option value="approved">تمت الموافقة</option><option value="rejected">مرفوض</option></select></label>
+          <label className="field"><span>الكلية أو المعهد</span><select value={unitFilter} onChange={(e) => { setUnitFilter(e.target.value); setSpecializationFilter('all'); setPageNumber(0); }}><option value="all">كل الكليات والمعاهد</option>{(catalog.units || []).map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></label>
+          <label className="field"><span>الاختصاص</span><select value={specializationFilter} onChange={(e) => { setSpecializationFilter(e.target.value); setPageNumber(0); }}><option value="all">كل الاختصاصات</option>{(catalog.specializations || []).filter((spec) => unitFilter === 'all' || spec.unit_id === unitFilter).map((spec) => <option key={spec.id} value={spec.id}>{spec.name}</option>)}</select></label>
+          <label className="field"><span>من تاريخ</span><input type="date" value={fromDate} onChange={(e) => { setFromDate(e.target.value); setPageNumber(0); }} /></label>
+          <label className="field"><span>إلى تاريخ</span><input type="date" value={toDate} min={fromDate || undefined} onChange={(e) => { setToDate(e.target.value); setPageNumber(0); }} /></label>
+          <div className="advanced-filter-actions"><button className="primary-button" type="button" onClick={() => { setPageNumber(0); setSearch(searchInput); }}>تطبيق البحث</button><button className="secondary-button" type="button" onClick={() => { setSearch(''); setSearchInput(''); setStatusFilter('all'); setUnitFilter('all'); setSpecializationFilter('all'); setFromDate(''); setToDate(''); setPageNumber(0); }}>إلغاء الفلاتر</button><button className="refresh-button" type="button" onClick={loadApplications} title="تحديث النتائج">↻</button></div>
+        </div>
+        {loading ? <div className="empty-state">جارٍ تحميل الطلبات…</div> : filtered.length === 0 ? <div className="empty-state"><span>⌕</span><strong>لا توجد طلبات مطابقة</strong><p>عدّل البحث أو الفلاتر لعرض نتائج أخرى.</p></div> : <div className="table-scroll"><table className="applications-table"><thead><tr><th>الطالب / الرمز</th><th>الكلية / الاختصاص</th><th>المبلغ</th><th>الحالة</th><th>التاريخ</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : ''} onClick={() => { setSelected(item); setRejectReason(item.rejection_reason || ''); setReceiptLink(''); }}><td><strong>{item.full_name}</strong><small>{item.tracking_code} · {item.university_number}</small><small>{item.phone_number || '—'}</small></td><td><span>{item.department}</span><small>{item.specialization}</small></td><td><strong>{fmt(item.amount_syp)} ل.س</strong><small>{fmt(item.companions)} مرافق · {fmt(item.carried_subjects)} مادة محمولة</small></td><td><span className={`status-badge ${STATUS[item.status]?.className || 'pending'}`}>{STATUS[item.status]?.label || item.status}</span></td><td>{humanDate(item.created_at)}</td></tr>)}</tbody></table></div>}
+        <div className="pagination-row"><span>عرض {fmt(filtered.length ? pageNumber * pageSize + 1 : 0)}–{fmt(Math.min((pageNumber + 1) * pageSize, totalFiltered))} من {fmt(totalFiltered)}</span><div><button className="secondary-button" type="button" disabled={pageNumber <= 0 || loading} onClick={() => setPageNumber((old) => Math.max(0, old - 1))}>السابق</button><strong>صفحة {fmt(pageNumber + 1)} من {fmt(Math.max(1, Math.ceil(totalFiltered / pageSize)))}</strong><button className="secondary-button" type="button" disabled={(pageNumber + 1) * pageSize >= totalFiltered || loading} onClick={() => setPageNumber((old) => old + 1)}>التالي</button></div></div>
       </div>
-      <div className="panel review-panel">{selected ? <><div className="review-top"><span className="section-index">تفاصيل الطلب</span><span className={`status-badge ${STATUS[selected.status]?.className || 'pending'}`}>{STATUS[selected.status]?.label || selected.status}</span></div><h2>{selected.full_name}</h2><div className="review-code" dir="ltr">{selected.tracking_code}</div><div className="review-details"><div><span>الرقم الجامعي</span><strong>{selected.university_number}</strong></div><div><span>هاتف التواصل</span><strong>{selected.phone_number || '—'}</strong></div><div><span>الكلية أو المعهد</span><strong>{selected.department}</strong></div><div><span>الاختصاص</span><strong>{selected.specialization || 'لا يوجد اختصاص'}</strong></div><div><span>المواد المحمولة</span><strong>{fmt(selected.carried_subjects)}</strong></div><div><span>عدد المرافقين</span><strong>{fmt(selected.companions)}</strong></div><div><span>المبلغ الإجمالي</span><strong>{fmt(selected.amount_syp)} ل.س</strong></div><div><span>تاريخ الطلب</span><strong>{humanDate(selected.created_at)}</strong></div></div><button className="receipt-open-button" onClick={openReceipt} disabled={!selected.receipt_path}>{selected.receipt_path ? 'عرض فاتورة الدفع PDF ↗' : 'لم تُرفع الفاتورة بعد'}</button>{selected.status === 'awaiting_payment' && <div className="important-warning"><strong>لا يمكن مراجعة هذا الطلب بعد</strong><p>الطلب بانتظار أن يدفع الطالب ويرفع فاتورة PDF. لن تظهر أزرار القرار قبل رفع الفاتورة.</p></div>}{selected.status === 'rejected' && selected.rejection_reason && <div className="prior-reason"><strong>سبب الرفض المسجل</strong><p>{selected.rejection_reason}</p></div>}{selected.receipt_path && <><div className="decision-divider" /><label className="field"><span>سبب الرفض (مطلوب عند الرفض)</span><textarea rows="3" maxLength="1000" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="اكتب سبب الرفض بوضوح ليظهر للطالب عند تتبع الطلب…" /></label><div className="decision-actions"><button className="reject-button" disabled={savingDecision} onClick={() => decide('rejected')}>رفض الطلب</button><button className="approve-button" disabled={savingDecision} onClick={() => decide('approved')}>✓ موافقة على الطلب</button></div><small className="muted-line">سيتم تسجيل حساب الموظف وتاريخ اتخاذ القرار.</small></>}</> : <div className="review-empty"><div>☷</div><strong>اختر طلباً لمراجعته</strong><p>اضغط على أي صف في قائمة الطلبات لعرض التفاصيل والفاتورة عند توفرها.</p></div>}</div></div>
+      <div className="panel review-panel">{selected ? <><div className="review-top"><span className="section-index">تفاصيل الطلب</span><span className={`status-badge ${STATUS[selected.status]?.className || 'pending'}`}>{STATUS[selected.status]?.label || selected.status}</span></div><h2>{selected.full_name}</h2><div className="review-code" dir="ltr">{selected.tracking_code}</div><div className="review-details"><div><span>الرقم الجامعي</span><strong>{selected.university_number}</strong></div><div><span>هاتف التواصل</span><strong>{selected.phone_number || '—'}</strong></div><div><span>الكلية أو المعهد</span><strong>{selected.department}</strong></div><div><span>الاختصاص</span><strong>{selected.specialization || 'لا يوجد اختصاص'}</strong></div><div><span>المواد المحمولة</span><strong>{fmt(selected.carried_subjects)}</strong></div><div><span>عدد المرافقين</span><strong>{fmt(selected.companions)}</strong></div><div><span>المبلغ الإجمالي</span><strong>{fmt(selected.amount_syp)} ل.س</strong></div><div><span>تاريخ الطلب</span><strong>{humanDate(selected.created_at)}</strong></div></div>{selected.receipt_path ? <button className="receipt-open-button" onClick={openReceipt}>عرض فاتورة الدفع PDF ↗</button> : selected.receipt_archive_path ? <div className="notice notice-warning"><strong>الفاتورة مؤرشفة خارج التخزين السحابي</strong><p>مسار الأرشيف: <code dir="ltr">{selected.receipt_archive_path}</code>. يلزم الوصول إلى وحدة الأرشيف المؤمّنة لمعاينة الملف.</p></div> : <div className="important-warning"><strong>لم تُرفع الفاتورة بعد</strong></div>}{selected.status === 'awaiting_payment' && <div className="important-warning"><strong>لا يمكن مراجعة هذا الطلب بعد</strong><p>الطلب بانتظار أن يدفع الطالب ويرفع فاتورة PDF. لن تظهر أزرار القرار قبل رفع الفاتورة.</p></div>}{selected.status === 'rejected' && selected.rejection_reason && <div className="prior-reason"><strong>سبب الرفض المسجل</strong><p>{selected.rejection_reason}</p></div>}{selected.receipt_path && <><div className="decision-divider" /><label className="field"><span>سبب الرفض (مطلوب عند الرفض)</span><textarea rows="3" maxLength="1000" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="اكتب سبب الرفض بوضوح ليظهر للطالب عند تتبع الطلب…" /></label><div className="decision-actions"><button className="reject-button" disabled={savingDecision} onClick={() => decide('rejected')}>رفض الطلب</button><button className="approve-button" disabled={savingDecision} onClick={() => decide('approved')}>✓ موافقة على الطلب</button></div><small className="muted-line">سيتم تسجيل حساب الموظف وتاريخ اتخاذ القرار.</small></>}</> : <div className="review-empty"><div>☷</div><strong>اختر طلباً لمراجعته</strong><p>اضغط على أي صف في قائمة الطلبات لعرض التفاصيل والفاتورة عند توفرها.</p></div>}</div>
     </>}
 
-    {tab === 'settings' && isAdmin && <div className="panel settings-panel"><div className="settings-header"><div><span className="section-index">تخصيص المنصة</span><h2>الرسوم والدفع</h2><p>تطبق الإعدادات على الطلبات الجديدة. تبقى مبالغ الطلبات المنشأة سابقاً محفوظة كما هي.</p></div><span className={`open-indicator ${localSettings.registration_open ? 'is-open' : ''}`}>{localSettings.registration_open ? 'التسجيل العام مفتوح' : 'التسجيل العام مغلق'}</span></div><form onSubmit={saveSettings}><div className="settings-grid"><label className="field"><span>عنوان الصفحة</span><input value={localSettings.event_title || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, event_title: e.target.value }))} required /></label><label className="field"><span>اسم الجامعة</span><input value={localSettings.university_label || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, university_label: e.target.value }))} required /></label><label className="field field-full"><span>الجهة المنظمة</span><input value={localSettings.organizer || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, organizer: e.target.value }))} required /></label><label className="field"><span>رسوم الطالب (ل.س)</span><input type="number" min="0" step="1" value={localSettings.student_fee ?? 0} onChange={(e) => setLocalSettings((s) => ({ ...s, student_fee: e.target.value }))} required /></label><label className="field"><span>رسوم المرافق الواحد (ل.س)</span><input type="number" min="0" step="1" value={localSettings.companion_fee ?? 0} onChange={(e) => setLocalSettings((s) => ({ ...s, companion_fee: e.target.value }))} required /></label><label className="field"><span>الحد الأقصى للمرافقين</span><input type="number" min="0" max="20" step="1" value={localSettings.max_companions ?? 4} onChange={(e) => setLocalSettings((s) => ({ ...s, max_companions: e.target.value }))} required /></label><label className="field"><span>الحد الأقصى للمواد المحمولة</span><input type="number" min="0" max="30" step="1" value={localSettings.max_carried_subjects ?? 5} onChange={(e) => setLocalSettings((s) => ({ ...s, max_carried_subjects: e.target.value }))} required /><small className="field-help">يُرفض التسجيل تلقائياً إذا تجاوز الطالب الحد المحدد.</small></label><label className="field field-full"><span>رقم حساب شام كاش</span><input value={localSettings.shamcash_account || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, shamcash_account: e.target.value }))} placeholder="أدخل رقم الحساب أو معرّف الدفع" /></label><label className="field field-full"><span>ملاحظات إضافية تظهر للطلاب في صفحة الدفع</span><textarea rows="3" value={localSettings.payment_instructions || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, payment_instructions: e.target.value }))} /></label><div className="field field-full"><span>رمز QR للدفع</span><div className="qr-admin-upload">{localSettings.qr_image_url && <img src={localSettings.qr_image_url} alt="رمز الدفع الحالي" />}<label className="secondary-button upload-qr-button">رفع صورة QR<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => uploadQr(e.target.files?.[0])} /></label><small>صورة PNG أو JPG أو WebP، حتى 3 ميغابايت.</small></div></div><div className="field field-full"><span>صور توضيحية لخطوات الدفع (حتى 8 صور)</span><div className="payment-images-admin"><label className="secondary-button upload-qr-button">إضافة صور توضيحية<input type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={(e) => { uploadPaymentImages(Array.from(e.target.files || [])); e.target.value = ''; }} /></label><div className="payment-images-admin-grid">{(Array.isArray(localSettings.payment_images) ? localSettings.payment_images : []).map((url, index) => <figure key={url}><img src={url} alt={`صورة الدفع ${index + 1}`} /><button type="button" className="reject-button" onClick={() => setLocalSettings((old) => ({ ...old, payment_images: old.payment_images.filter((item) => item !== url) }))}>إزالة الصورة</button></figure>)}</div><small>بعد الإضافة أو الإزالة اضغط «حفظ الإعدادات» حتى تظهر التغييرات للطلاب.</small></div></div><label className="toggle-row field-full"><input type="checkbox" checked={Boolean(localSettings.registration_open)} onChange={(e) => setLocalSettings((s) => ({ ...s, registration_open: e.target.checked }))} /><span className="toggle-look" /><span><strong>فتح التسجيل العام</strong><small>يجب فتح التسجيل العام والجهة الدراسية والاختصاص حتى يستطيع الطالب التسجيل.</small></span></label></div><div className="settings-save-row"><button className="primary-button" disabled={savingSettings}><span>{savingSettings ? 'جارٍ الحفظ…' : 'حفظ الإعدادات'}</span><span className="button-arrow">←</span></button><button type="button" className="secondary-button" onClick={() => setLocalSettings({ ...DEFAULT_SETTINGS, ...settings, payment_images: Array.isArray(settings.payment_images) ? settings.payment_images : [] })}>إلغاء التعديلات</button></div></form></div>}
+    {tab === 'team' && isAdmin && <StaffManagementPanel staffUser={staffUser} catalog={catalog} notify={notify} />}
+
+    {tab === 'settings' && isAdmin && <div className="panel settings-panel"><div className="settings-header"><div><span className="section-index">تخصيص المنصة</span><h2>الرسوم والدفع</h2><p>تطبق الإعدادات على الطلبات الجديدة. تبقى مبالغ الطلبات المنشأة سابقاً محفوظة كما هي.</p></div><span className={`open-indicator ${localSettings.registration_open ? 'is-open' : ''}`}>{localSettings.registration_open ? 'التسجيل العام مفتوح' : 'التسجيل العام مغلق'}</span></div><form onSubmit={saveSettings}><div className="settings-grid"><label className="field"><span>عنوان الصفحة</span><input value={localSettings.event_title || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, event_title: e.target.value }))} required /></label><label className="field"><span>اسم الدفعة</span><input value={localSettings.batch_name || 'دفعة 2026'} onChange={(e) => setLocalSettings((s) => ({ ...s, batch_name: e.target.value }))} placeholder="مثال: دفعة الأمل 2026" required /></label><label className="field"><span>اسم الجامعة</span><input value={localSettings.university_label || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, university_label: e.target.value }))} required /></label><label className="field field-full"><span>الجهة المنظمة</span><input value={localSettings.organizer || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, organizer: e.target.value }))} required /></label><label className="field"><span>رسوم الطالب (ل.س)</span><input type="number" min="0" step="1" value={localSettings.student_fee ?? 0} onChange={(e) => setLocalSettings((s) => ({ ...s, student_fee: e.target.value }))} required /></label><label className="field"><span>رسوم المرافق الواحد (ل.س)</span><input type="number" min="0" step="1" value={localSettings.companion_fee ?? 0} onChange={(e) => setLocalSettings((s) => ({ ...s, companion_fee: e.target.value }))} required /></label><label className="field"><span>الحد الأقصى للمرافقين</span><input type="number" min="0" max="20" step="1" value={localSettings.max_companions ?? 4} onChange={(e) => setLocalSettings((s) => ({ ...s, max_companions: e.target.value }))} required /></label><label className="field"><span>الحد الأقصى للمواد المحمولة</span><input type="number" min="0" max="30" step="1" value={localSettings.max_carried_subjects ?? 5} onChange={(e) => setLocalSettings((s) => ({ ...s, max_carried_subjects: e.target.value }))} required /><small className="field-help">يُرفض التسجيل تلقائياً إذا تجاوز الطالب الحد المحدد.</small></label><label className="field field-full"><span>رقم حساب شام كاش</span><input value={localSettings.shamcash_account || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, shamcash_account: e.target.value }))} placeholder="أدخل رقم الحساب أو معرّف الدفع" /></label><label className="field field-full"><span>ملاحظات إضافية تظهر للطلاب في صفحة الدفع</span><textarea rows="3" value={localSettings.payment_instructions || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, payment_instructions: e.target.value }))} /></label><div className="field field-full"><span>رمز QR للدفع</span><div className="qr-admin-upload">{localSettings.qr_image_url && <img src={localSettings.qr_image_url} alt="رمز الدفع الحالي" />}<label className="secondary-button upload-qr-button">رفع صورة QR<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => uploadQr(e.target.files?.[0])} /></label><small>صورة PNG أو JPG أو WebP، حتى 3 ميغابايت.</small></div></div><div className="field field-full"><span>صور توضيحية لخطوات الدفع (حتى 8 صور)</span><div className="payment-images-admin"><label className="secondary-button upload-qr-button">إضافة صور توضيحية<input type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={(e) => { uploadPaymentImages(Array.from(e.target.files || [])); e.target.value = ''; }} /></label><div className="payment-images-admin-grid">{(Array.isArray(localSettings.payment_images) ? localSettings.payment_images : []).map((url, index) => <figure key={url}><img src={url} alt={`صورة الدفع ${index + 1}`} /><button type="button" className="reject-button" onClick={() => setLocalSettings((old) => ({ ...old, payment_images: old.payment_images.filter((item) => item !== url) }))}>إزالة الصورة</button></figure>)}</div><small>بعد الإضافة أو الإزالة اضغط «حفظ الإعدادات» حتى تظهر التغييرات للطلاب.</small></div></div><label className="toggle-row field-full"><input type="checkbox" checked={Boolean(localSettings.registration_open)} onChange={(e) => setLocalSettings((s) => ({ ...s, registration_open: e.target.checked }))} /><span className="toggle-look" /><span><strong>فتح التسجيل العام</strong><small>يجب فتح التسجيل العام والجهة الدراسية والاختصاص حتى يستطيع الطالب التسجيل.</small></span></label></div><div className="settings-save-row"><button className="primary-button" disabled={savingSettings}><span>{savingSettings ? 'جارٍ الحفظ…' : 'حفظ الإعدادات'}</span><span className="button-arrow">←</span></button><button type="button" className="secondary-button" onClick={() => setLocalSettings({ ...DEFAULT_SETTINGS, ...settings, payment_images: Array.isArray(settings.payment_images) ? settings.payment_images : [] })}>إلغاء التعديلات</button></div></form></div>}
 
     {tab === 'academic' && isAdmin && <div className="panel settings-panel catalog-admin-panel"><div className="settings-header"><div><span className="section-index">قوائم التسجيل</span><h2>إدارة الكليات والمعاهد والاختصاصات</h2><p>يمكنك فتح التسجيل أو إيقافه لكل كلية أو معهد ولكل اختصاص بشكل مستقل. التغييرات تنعكس على القوائم التي يراها الطلاب.</p></div><button className="secondary-button" type="button" onClick={refreshCatalog}>تحديث القوائم ↻</button></div>
       {catalogError && <div className="notice notice-warning"><strong>قاعدة البيانات تحتاج إلى الترقية</strong><p>شغّل ملف supabase/migrations/002_staged_registration_and_academic_catalog.sql في SQL Editor أولاً. التفاصيل: {catalogError}</p></div>}

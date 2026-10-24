@@ -3,4 +3,5 @@ dist
 .env
 .env.local
 .DS_Store
-/latakia-graduation-registration/
+.env.archive.local
+receipt-archive/

@@ -13,3 +13,6 @@ verify_jwt = false
 
 [functions.verify-ticket]
 verify_jwt = false
+
+[functions.manage-staff]
+verify_jwt = true

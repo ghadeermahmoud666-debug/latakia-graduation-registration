@@ -429,3 +429,81 @@ body{background:#fbf5e9;color:#41423b}
   .ticket-data-grid strong{font-size:10px}
 }
 @media(prefers-reduced-motion:reduce){.approval-celebration *,.verification-spinner{animation:none !important;transition:none !important}}
+
+
+/* المرحلة الرابعة: لوحة الفريق، التصفية المتقدمة، صور الدفع والأرشفة */
+.advanced-filter-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding:18px;border-top:1px solid #e9dfd3;border-bottom:1px solid #e9dfd3;background:#fffdf9}
+.advanced-filter-grid .field{min-width:0;margin:0}
+.advanced-filter-grid .field>span{font-size:11px;color:#52675b;font-weight:800}
+.advanced-filter-grid input,.advanced-filter-grid select{min-height:44px;width:100%;min-width:0}
+.advanced-filter-grid .search-field{grid-column:span 2}
+.advanced-filter-actions{display:flex;align-items:end;gap:8px;flex-wrap:wrap}
+.advanced-filter-actions .primary-button,.advanced-filter-actions .secondary-button,.advanced-filter-actions .refresh-button{min-height:44px;padding:10px 14px}
+.export-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.export-button{font-size:11px;min-height:42px}
+.pagination-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 16px;color:#69796d;font-size:11px}
+.pagination-row>div{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pagination-row .secondary-button{min-height:38px;padding:8px 12px}
+.staff-management-panel{display:flex;flex-direction:column;gap:18px}
+.staff-create-form{display:flex;flex-direction:column;gap:14px;padding:18px;border:1px solid #e8d9c8;border-radius:12px;background:#fffaf2}
+.staff-create-form h3,.staff-list-heading h3{margin:0;color:#18594b;font-size:16px}
+.staff-form-grid{display:grid;grid-template-columns:2fr 1fr;gap:14px}
+.staff-create-form .primary-button{align-self:flex-start;min-height:46px}
+.staff-list-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.staff-list-heading>span{font-size:12px;color:#8b7865}
+.staff-member-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.staff-member-card{min-width:0;border:1px solid #e7d8c7;border-radius:12px;padding:15px;background:#fffdfa}
+.staff-member-head{display:flex;flex-direction:column;gap:8px}
+.staff-member-head>div{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.staff-member-head>div>strong{font-size:13px;overflow-wrap:anywhere;color:#294c3e}
+.staff-member-head>small{font-size:10px;color:#887d70}
+.staff-scope-summary{font-size:12px;line-height:1.9;color:#647066;background:#f5f0e6;border-radius:8px;padding:9px;margin:12px 0}
+.staff-member-actions{display:flex;gap:8px;flex-wrap:wrap}
+.staff-member-actions button{min-height:39px;font-size:11px;padding:8px 11px}
+.staff-editor{display:flex;flex-direction:column;gap:12px;margin-top:14px;border-top:1px solid #e6d7c5;padding-top:14px}
+.staff-editor h4{margin:0;color:#18594b;font-size:14px}
+.staff-scope-picker{display:flex;flex-direction:column;gap:10px;max-height:330px;overflow:auto;padding:10px;border:1px solid #e8d9c8;border-radius:9px;background:#fffdf8}
+.staff-scope-unit{border-bottom:1px solid #eee3d7;padding:9px 2px}
+.staff-scope-unit:last-child{border-bottom:0}
+.staff-scope-check{display:flex;align-items:flex-start;gap:9px;cursor:pointer;color:#354f42;font-size:12px;line-height:1.7}
+.staff-scope-check input{width:18px;height:18px;flex:none;accent-color:#18594b;margin-top:2px}
+.staff-scope-check span{display:flex;flex-direction:column;gap:2px}
+.staff-scope-check small{color:#8d8171;font-size:10px}
+.staff-scope-child{padding:7px 28px 3px 0}
+.temporary-credential-box{display:flex;flex-direction:column;gap:10px;padding:15px;border:1px solid #8cb9a4;border-radius:10px;background:#edf8f1}
+.temporary-credential-box strong{font-size:13px;color:#18594b}
+.temporary-credential-box p{font-size:11px;line-height:1.8;margin:0;color:#536b5b}
+.temporary-credential-box code{display:block;direction:ltr;overflow-wrap:anywhere;font-size:15px;font-weight:800;padding:12px;border-radius:8px;background:white;border:1px dashed #9dc5ad;color:#315943}
+.temporary-credential-box .secondary-button{align-self:flex-start}
+/* QR والصور التوضيحية أكبر وأكثر وضوحًا، خصوصًا على الهاتف. */
+.qr-admin-upload img{width:220px;height:220px;max-width:min(100%,220px);object-fit:contain;background:#fff;padding:8px;border:1px solid #e4d6c5;border-radius:10px}
+.payment-images-admin-grid img{height:180px}
+.payment-account-area .qr-container img{width:min(100%,340px);max-height:none;height:auto;object-fit:contain;margin-inline:auto;display:block}
+.payment-account-area .qr-container{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:15px;background:#fffaf2;border:1px solid #e7d7c3;border-radius:12px}
+.payment-guide-images img{height:clamp(190px,32vw,320px);object-fit:contain;background:#fffaf2}
+@media(max-width:900px){.advanced-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.staff-member-list{grid-template-columns:1fr}}
+@media(max-width:600px){
+ .advanced-filter-grid{grid-template-columns:minmax(0,1fr);padding:13px;gap:12px}
+ .advanced-filter-grid .search-field{grid-column:1}
+ .advanced-filter-actions{display:grid;grid-template-columns:1fr 1fr;width:100%}
+ .advanced-filter-actions .primary-button{grid-column:span 2;width:100%}
+ .advanced-filter-actions .secondary-button,.advanced-filter-actions .refresh-button{width:100%}
+ .export-actions{width:100%;display:grid;grid-template-columns:1fr}
+ .export-button{width:100%}
+ .staff-form-grid{grid-template-columns:1fr}
+ .staff-create-form{padding:13px}
+ .staff-create-form .primary-button{width:100%}
+ .staff-member-card{padding:12px}
+ .staff-member-actions{display:grid;grid-template-columns:1fr}
+ .staff-member-actions button{width:100%}
+ .pagination-row{align-items:flex-start;flex-direction:column}
+ .pagination-row>div{width:100%;justify-content:space-between}
+ .qr-admin-upload{align-items:flex-start}
+ .qr-admin-upload img{width:min(100%,240px);height:auto;aspect-ratio:1}
+ .payment-account-area .qr-container img{width:min(100%,320px)}
+ .payment-guide-images img{height:clamp(210px,65vw,320px)}
+ .payment-images-admin-grid{grid-template-columns:1fr}
+ .payment-images-admin-grid img{height:220px}
+}
+
+.staff-login-card .secondary-button{width:100%;min-height:44px;margin-top:9px}

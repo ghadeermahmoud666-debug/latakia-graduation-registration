@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "archive:receipts": "node scripts/archive-receipts.mjs",
+    "restore:receipt": "node scripts/restore-archived-receipt.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",

@@ -30,17 +30,18 @@
 
 ## 2. نشر الوظائف الخلفية
 
-ثبّت Supabase CLI ثم سجّل الدخول واربط المجلد بالمشروع:
+افتح الطرفية داخل مجلد المشروع. تحتاج Node.js 20 أو أحدث. ثبّت Supabase CLI محليًا للمشروع ثم سجّل الدخول واربط المجلد بالمشروع:
 
 ```bash
 npm install
-supabase login
-supabase link --project-ref YOUR_PROJECT_REF
-supabase functions deploy submit-application
-supabase functions deploy track-application
+npm install supabase --save-dev
+npx supabase login
+npx supabase link --project-ref YOUR_PROJECT_REF
+npx supabase functions deploy submit-application
+npx supabase functions deploy track-application
 ```
 
-استخدم `YOUR_PROJECT_REF` من عنوان مشروع Supabase. تتوفر عادةً متغيرات `SUPABASE_URL` و`SUPABASE_SERVICE_ROLE_KEY` للوظائف المنشورة في بيئة Supabase. إن طلبت بيئتك ضبطها يدوياً، أضفها كـ **Secrets** للوظائف من واجهة Supabase/CLI، ولا تضعها في الواجهة.
+استخدم `YOUR_PROJECT_REF` من عنوان مشروع Supabase. تُحقن متغيرات `SUPABASE_URL` و`SUPABASE_SERVICE_ROLE_KEY` في وظائف Supabase المستضافة عادةً تلقائياً. لا تضعها في ملفات الواجهة أو GitHub، ولا تحاول تعريف أسرار مخصصة تبدأ بـ `SUPABASE_`؛ هذا البادئ محجوز في Supabase. يحتوي `supabase/config.toml` على إعدادات الوظائف العامة، لأن الطالب لا يحتاج إلى حساب لتقديم الطلب أو تتبعه.
 
 ## 3. تشغيل الواجهة محلياً
 
@@ -121,3 +122,9 @@ supabase/
   functions/track-application/index.ts
 .env.example
 ```
+
+## المرحلة الرابعة: صلاحيات الفريق والأرشفة
+
+راجع `PHASE_4_UPDATE_AR.md` للتعليمات الكاملة. أضيفت migration 004 التي تضيف نطاق صلاحيات المراجع حسب الكلية/الاختصاص، واسم الدفعة، ومسارات/بصمات أرشفة الإيصالات. انشر وظيفة `manage-staff` بعد تطبيق الترقية.
+
+أدوات الأرشفة والاستعادة: `scripts/archive-receipts.mjs` و`scripts/restore-archived-receipt.mjs`. احفظ ملفات الأرشيف خارج مجلد المشروع، ولا تنفذ حذف النسخ السحابية قبل وجود نسختين احتياطيتين ومقارنة بصمة SHA-256.
