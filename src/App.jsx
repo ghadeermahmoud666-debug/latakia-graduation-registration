@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import QRCode from 'qrcode';
 import JSZip from 'jszip';
-import { BrowserQRCodeReader } from '@zxing/browser';
+import { BrowserMultiFormatReader } from '@zxing/browser';
+import { BarcodeFormat, DecodeHintType } from '@zxing/library';
+import JsBarcode from 'jsbarcode';
 import { anonKeyValue, configurationProblem, functionUrl, isConfigured, supabase } from './lib/supabase';
 import { createReceiptArchivePdf, downloadBlob as downloadArchiveBlob, safeArchiveFilename, saveArchiveToDirectory, sha256Blob } from './lib/localArchive';
 import { downloadTicketsAsOnePdf, downloadTicketsSeparatelyZip } from './lib/ticketDownloads';
@@ -10,8 +11,10 @@ import FinancialLedgerPanel from './components/FinancialLedgerPanel.jsx';
 const DEFAULT_SETTINGS = {
   id: 1,
   event_title: 'التسجيل لحفلات التخرج',
-  batch_name: 'دفعة 2026',
+  batch_name: 'دفعة البناء والتأسيس 2026',
   university_label: 'جامعة اللاذقية',
+  event_location: '',
+  event_date: '',
   organizer: 'اتحاد طلبة سوريا – فرع محافظة اللاذقية',
   registration_open: false,
   student_fee: 0,
@@ -446,10 +449,10 @@ function App() {
       </>}
 
       {page === 'track' && <section className="container inner-page"><div className="inner-hero"><span className="section-index">متابعة التسجيل</span><h1>أين وصل طلبك؟</h1><p>أدخل رمز التتبع الخاص بك فقط. هذا الرمز فريد ويكفي لمعرفة حالة الطلب؛ لا تحتاج إلى الرقم الجامعي.</p></div><div className="track-layout"><form className="panel track-panel" onSubmit={handleTrack}><label className="field"><span>رمز التتبع <b>*</b></span><div className="input-wrap"><input required value={trackingCode} onChange={(e) => setTrackingCode(e.target.value.toUpperCase())} placeholder="LAT- ثم الرمز الطويل" autoCapitalize="characters" /></div></label><button className="primary-button" disabled={trackingBusy}><span>{trackingBusy ? 'جارٍ البحث…' : 'عرض حالة الطلب'}</span><span className="button-arrow">←</span></button><p className="form-footnote">احتفظ برمز التتبع ولا تشاركه إلا مع فريق التنظيم. لا يمكن تتبع الطلب برقم جامعي وحده.</p></form>
-          {trackingResult ? <div className="panel track-result"><div className="result-header"><span className="section-index">نتيجة الاستعلام</span><span className={`status-badge ${STATUS[trackingResult.status]?.className || 'pending'}`}>{STATUS[trackingResult.status]?.label || trackingResult.status}</span></div><h2>{trackingResult.full_name}</h2><div className="result-code"><span>رمز التتبع</span><strong dir="ltr">{trackingResult.tracking_code}</strong></div><div className="result-meta"><div><span>تاريخ التقديم</span><strong>{humanDate(trackingResult.created_at)}</strong></div><div><span>المبلغ المسجل</span><strong>{fmt(trackingResult.amount_syp)} ل.س</strong></div><div><span>الكلية أو المعهد</span><strong>{trackingResult.department}</strong></div><div><span>الاختصاص</span><strong>{trackingResult.specialization}</strong></div></div>{trackingResult.status === 'awaiting_payment' && <><div className="important-warning"><strong>الطلب بانتظار الفاتورة</strong><p>أتمم التحويل مع كتابة رمز التتبع في الملاحظات، ثم ارفع فاتورة PDF هنا.</p></div><form className="track-receipt-form" onSubmit={handleTrackReceiptUpload}><label className="field"><span>فاتورة التحويل PDF <b>*</b></span><input type="file" accept="application/pdf,.pdf" onChange={(e) => setTrackReceipt(e.target.files?.[0] || null)} required /></label><button className="primary-button" disabled={trackReceiptBusy || !trackReceipt}><span>{trackReceiptBusy ? 'جارٍ الرفع…' : 'رفع الفاتورة'}</span></button></form></>}{trackingResult.status === 'pending' && <p className="result-message">تم استلام الفاتورة؛ طلبك قيد المراجعة من قبل فريق التنظيم.</p>}{trackingResult.status === 'approved' && <><ApprovalCelebration name={trackingResult.full_name} /><TicketGallery tickets={trackingResult.tickets || []} application={trackingResult} batchName={settings.batch_name || DEFAULT_SETTINGS.batch_name} /></>}{trackingResult.status === 'rejected' && <div className="rejection-message"><strong>سبب الرفض</strong><p>{trackingResult.rejection_reason || 'يرجى التواصل مع فريق التنظيم لمعرفة التفاصيل.'}</p></div>}</div> : <div className="track-help"><div className="big-lock">⌑</div><h3>بياناتك محمية</h3><p>لا يظهر طلبك إلا لمن يمتلك رمز التتبع الفريد.</p></div>}
+          {trackingResult ? <div className="panel track-result"><div className="result-header"><span className="section-index">نتيجة الاستعلام</span><span className={`status-badge ${STATUS[trackingResult.status]?.className || 'pending'}`}>{STATUS[trackingResult.status]?.label || trackingResult.status}</span></div><h2>{trackingResult.full_name}</h2><div className="result-code"><span>رمز التتبع</span><strong dir="ltr">{trackingResult.tracking_code}</strong></div><div className="result-meta"><div><span>تاريخ التقديم</span><strong>{humanDate(trackingResult.created_at)}</strong></div><div><span>المبلغ المسجل</span><strong>{fmt(trackingResult.amount_syp)} ل.س</strong></div><div><span>الكلية أو المعهد</span><strong>{trackingResult.department}</strong></div><div><span>الاختصاص</span><strong>{trackingResult.specialization}</strong></div></div>{trackingResult.status === 'awaiting_payment' && <><div className="important-warning"><strong>الطلب بانتظار الفاتورة</strong><p>أتمم التحويل مع كتابة رمز التتبع في الملاحظات، ثم ارفع فاتورة PDF هنا.</p></div><form className="track-receipt-form" onSubmit={handleTrackReceiptUpload}><label className="field"><span>فاتورة التحويل PDF <b>*</b></span><input type="file" accept="application/pdf,.pdf" onChange={(e) => setTrackReceipt(e.target.files?.[0] || null)} required /></label><button className="primary-button" disabled={trackReceiptBusy || !trackReceipt}><span>{trackReceiptBusy ? 'جارٍ الرفع…' : 'رفع الفاتورة'}</span></button></form></>}{trackingResult.status === 'pending' && <p className="result-message">تم استلام الفاتورة؛ طلبك قيد المراجعة من قبل فريق التنظيم.</p>}{trackingResult.status === 'approved' && <><ApprovalCelebration name={trackingResult.full_name} /><TicketGallery tickets={trackingResult.tickets || []} application={trackingResult} batchName={settings.batch_name || DEFAULT_SETTINGS.batch_name} eventLocation={settings.event_location || ''} eventDate={settings.event_date || ''} /></>}{trackingResult.status === 'rejected' && <div className="rejection-message"><strong>سبب الرفض</strong><p>{trackingResult.rejection_reason || 'يرجى التواصل مع فريق التنظيم لمعرفة التفاصيل.'}</p></div>}</div> : <div className="track-help"><div className="big-lock">⌑</div><h3>بياناتك محمية</h3><p>لا يظهر طلبك إلا لمن يمتلك رمز التتبع الفريد.</p></div>}
         </div></section>}
 
-      {page === 'verify' && <section className="container inner-page ticket-verification-page"><div className="inner-hero"><span className="section-index">التحقق من بطاقة الدخول</span><h1>بوابة التحقق لحفل التخرج</h1><p>هذه الصفحة للقراءة والتحقق فقط ولا تسجّل دخولًا. تسجيل الحضور يتم حصريًا من ماسح QR داخل بوابة فريق التنظيم.</p></div>{ticketVerifyBusy && <div className="panel verification-state"><div className="verification-spinner" /><h2>جارٍ التحقق من رمز QR…</h2></div>}{!ticketVerifyBusy && ticketVerifyError && <div className="panel verification-state invalid-ticket"><div className="verification-symbol">×</div><h2>تعذّر التحقق من البطاقة</h2><p>{ticketVerifyError}</p></div>}{!ticketVerifyBusy && ticketVerification?.valid && <VerifiedTicket verification={ticketVerification} />}</section>}
+      {page === 'verify' && <section className="container inner-page ticket-verification-page"><div className="inner-hero"><span className="section-index">التحقق من بطاقة الدخول</span><h1>بوابة التحقق لحفل التخرج</h1><p>هذه الصفحة للقراءة والتحقق فقط ولا تسجّل دخولًا. تذكرة الإصدار الجديد تحتوي على باركود خطي. التذاكر القديمة التي تحتوي QR ما زالت مدعومة، ولا يُسجّل الحضور إلا من ماسح التذاكر داخل بوابة الفريق.</p></div>{ticketVerifyBusy && <div className="panel verification-state"><div className="verification-spinner" /><h2>جارٍ التحقق من رمز QR…</h2></div>}{!ticketVerifyBusy && ticketVerifyError && <div className="panel verification-state invalid-ticket"><div className="verification-symbol">×</div><h2>تعذّر التحقق من البطاقة</h2><p>{ticketVerifyError}</p></div>}{!ticketVerifyBusy && ticketVerification?.valid && <VerifiedTicket verification={ticketVerification} />}</section>}
 
       {page === 'staff' && <section className="container inner-page staff-page"><div className="inner-hero"><span className="section-index">للاستخدام الداخلي</span><h1>بوابة فريق التنظيم</h1><p>صفحة داخلية غير ظاهرة في قائمة الموقع العامة. الدخول مخصص للحسابات التي أنشأها مدير النظام فقط.</p></div><div className="staff-login-layout"><div className="panel staff-login-card"><div className="staff-login-mark">⌑</div><h2>تسجيل دخول الفريق</h2><p>استخدم بيانات الحساب المصرّح به من مدير النظام.</p><form onSubmit={handleLogin}><label className="field"><span>البريد الإلكتروني</span><div className="input-wrap"><input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" placeholder="name@example.com" /></div></label><label className="field"><span>كلمة المرور</span><div className="input-wrap"><input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" placeholder="أدخل كلمة المرور" /></div></label><button className="primary-button" disabled={authChecking || !isConfigured}><span>{authChecking ? 'جارٍ التحقق…' : 'تسجيل الدخول'}</span><span className="button-arrow">←</span></button>{!isConfigured && <small className="muted-line">إعداد قاعدة البيانات مطلوب قبل تسجيل الدخول.</small>}</form></div><div className="staff-login-info"><span className="section-index">صلاحيات المراجعة</span><h2>الطلبات المصرح بها فقط.</h2><p>تُحدد صلاحية كل حساب حسب الكليات والاختصاصات المسموح له بمراجعتها. لا يكفي إخفاء رابط الدخول وحده لحماية البيانات؛ يتم تطبيق الصلاحيات من قاعدة البيانات. يستطيع المدير وحده تعديل الرسوم وقوائم الكليات والاختصاصات.</p><div className="staff-feature"><span>✓</span><div><strong>مراجعة الإيصالات</strong><small>فتح ملف PDF من مساحة تخزين خاصة</small></div></div><div className="staff-feature"><span>✓</span><div><strong>توثيق القرار</strong><small>تسجيل الموافقة أو سبب الرفض وتاريخ المراجعة</small></div></div><div className="staff-feature"><span>✓</span><div><strong>إدارة قوائم التسجيل</strong><small>الكليات والمعاهد والاختصاصات وحدود المواد المحمولة</small></div></div></div></div></section>}
 
@@ -477,61 +480,109 @@ function ApprovalCelebration({ name }) {
   </section>;
 }
 
-function TicketGallery({ tickets, application, batchName }) {
+function TicketGallery({ tickets, application, batchName, eventLocation, eventDate }) {
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState('');
   if (!tickets.length) return <div className="ticket-loading-note"><strong>تم قبول الطلب</strong><p>يجري تجهيز بطاقات الدخول. حدّث حالة الطلب بعد لحظات إن لم تظهر البطاقات.</p></div>;
   async function downloadAllOnePdf() {
     setDownloading(true); setDownloadError('');
-    try { await downloadTicketsAsOnePdf(tickets, application, batchName); }
+    try { await downloadTicketsAsOnePdf(tickets, application, batchName, eventLocation, eventDate); }
     catch (error) { setDownloadError(error.message || 'تعذّر تجهيز ملف البطاقات.'); }
     finally { setDownloading(false); }
   }
   async function downloadSeparateTickets() {
     setDownloading(true); setDownloadError('');
-    try { await downloadTicketsSeparatelyZip(tickets, application, batchName); }
+    try { await downloadTicketsSeparatelyZip(tickets, application, batchName, eventLocation, eventDate); }
     catch (error) { setDownloadError(error.message || 'تعذّر تجهيز ملفات البطاقات.'); }
     finally { setDownloading(false); }
   }
   return <section className="ticket-gallery" id="entry-tickets">
-    <div className="ticket-gallery-heading"><div><span className="section-index">بطاقات الدخول</span><h3>بطاقاتك جاهزة للتنزيل</h3><p>يمكنك تنزيل جميع البطاقات في ملف PDF واحد متعدد الصفحات، أو تنزيل كل بطاقة كملف PDF مستقل داخل ZIP.</p></div></div>
-    <div className="ticket-download-actions"><button type="button" className="primary-button" disabled={downloading} onClick={downloadAllOnePdf}>{downloading ? 'جارٍ تجهيز البطاقات…' : 'تنزيل جميع البطاقات في PDF واحد'}</button><button type="button" className="secondary-button" disabled={downloading} onClick={downloadSeparateTickets}>تنزيل كل بطاقة منفصلة (ZIP)</button><button type="button" className="secondary-button ticket-print-button" onClick={() => window.print()}>طباعة البطاقات</button></div>
+    <div className="ticket-gallery-heading"><div><span className="section-index">بطاقات الدخول</span><h3>تذاكر حفلات التخرج — {batchName || 'دفعة 2026'}</h3><p>تصميم تذكرة أفقي مستوحى من النموذج المعتمد. حرّك أفقيًا لمعاينة التذكرة كاملة على الهاتف، أو نزّلها للطباعة.</p></div></div>
+    <div className="ticket-download-actions"><button type="button" className="primary-button" disabled={downloading} onClick={downloadAllOnePdf}>{downloading ? 'جارٍ تجهيز البطاقات…' : 'تنزيل جميع التذاكر في PDF واحد'}</button><button type="button" className="secondary-button" disabled={downloading} onClick={downloadSeparateTickets}>تنزيل كل تذكرة بملف مستقل (ZIP)</button><button type="button" className="secondary-button ticket-print-button" onClick={() => window.print()}>طباعة التذاكر</button></div>
     {downloadError && <div className="notice notice-warning" role="alert">{downloadError}</div>}
-    <div className="ticket-cards-grid">{tickets.map((ticket) => <EntryTicketCard key={ticket.ticket_token} ticket={ticket} application={application} batchName={batchName} />)}</div>
-    <p className="ticket-privacy-note">احتفظ بالملفات لنفسك ولا تنشرها؛ كل رمز QR مخصص لدخول شخص واحد.</p>
+    <div className="ticket-preview-scroll" dir="ltr"><div className="ticket-cards-grid">{tickets.map((ticket) => <EntryTicketCard key={ticket.ticket_token} ticket={ticket} application={application} batchName={batchName} eventLocation={eventLocation} eventDate={eventDate} />)}</div></div>
+    <p className="ticket-privacy-note">رمز الباركود مشفّر بصريًا لرمز البطاقة فقط، ولا يسجّل الدخول إلا عند مسحه من بوابة فريق التنظيم. احتفظ بالتذكرة لنفسك.</p>
   </section>;
 }
 
-function EntryTicketCard({ ticket, application, batchName }) {
-  const [qrData, setQrData] = useState('');
-  const verifyUrl = `${window.location.origin}/?ticket=${encodeURIComponent(ticket.ticket_token)}`;
-  useEffect(() => {
-    let alive = true;
-    QRCode.toDataURL(verifyUrl, { width: 240, margin: 1, errorCorrectionLevel: 'M', color: { dark: '#173f35', light: '#ffffff' } })
-      .then((data) => { if (alive) setQrData(data); })
-      .catch((error) => console.error('QR generation failed', error));
-    return () => { alive = false; };
-  }, [verifyUrl]);
-  const isGraduate = ticket.ticket_type === 'graduate' || ticket.ticket_number === 0;
-  return <article className={`entry-ticket-card ${isGraduate ? 'graduate-ticket' : 'companion-ticket'}`}>
-    <div className="entry-ticket-topline"><img src="/brand/ssu-emblem.png" alt="شعار اتحاد طلبة سوريا" /><div className="ticket-brand-copy"><strong>اتحاد طلبة سوريا</strong><span>فرع محافظة اللاذقية</span></div><span className="ticket-batch-pill">{batchName || 'دفعة 2026'}</span></div>
-    <div className="ticket-card-title"><span>{isGraduate ? 'بطاقة دخول الخريج' : `بطاقة دخول المرافق ${ticket.ticket_number}`}</span><strong className="ticket-type-pill">{isGraduate ? 'خريج' : 'مرافق'}</strong></div>
-    <h4>{application.full_name}</h4>
-    <p className="ticket-program">{application.department || '—'}{application.specialization && application.specialization !== 'لا يوجد اختصاص' ? ` · ${application.specialization}` : ''}</p>
-    <div className="ticket-data-grid">
-      {isGraduate && <><div><span>الرقم الجامعي</span><strong>{application.university_number || '—'}</strong></div><div><span>المواد المحمولة</span><strong>{fmt(application.carried_subjects)}</strong></div><div><span>عدد المرافقين</span><strong>{fmt(application.companions)}</strong></div><div><span>قيمة الرسوم</span><strong>{fmt(application.amount_syp)} ل.س</strong></div></>}
-      {!isGraduate && <><div><span>يرافق الخريج</span><strong>{application.full_name}</strong></div><div><span>رقم المرافق</span><strong>{fmt(ticket.ticket_number)}</strong></div><div><span>نوع الدخول</span><strong>مرافق</strong></div><div><span>صلاحية البطاقة</span><strong>بعد اعتماد الطلب</strong></div></>}
-    </div>
-    <div className="ticket-qr-area">{qrData ? <img src={qrData} alt={`رمز تحقق ${isGraduate ? 'بطاقة الخريج' : `المرافق ${ticket.ticket_number}`}`} /> : <div className="ticket-qr-placeholder">جارٍ إنشاء رمز QR…</div>}<div><strong>رمز تحقق الدخول</strong><small>امسح الرمز عند بوابة الحفل</small></div></div>
-    <div className="ticket-card-footer"><span>صالح بعد الموافقة النهائية</span><span dir="ltr">{isGraduate ? 'GRADUATE' : `GUEST-${String(ticket.ticket_number).padStart(2, '0')}`}</span></div>
-  </article>;
+function makeTicketDisplayNumber(ticket) {
+  const tokenPart = String(ticket?.ticket_token || '').replace(/^TKT-/i, '').slice(0, 12).toUpperCase();
+  const isGraduate = ticket?.ticket_type === 'graduate' || Number(ticket?.ticket_number) === 0;
+  const prefix = isGraduate ? 'GR' : `GU${String(ticket?.ticket_number ?? 0).padStart(2, '0')}`;
+  return `${prefix}-${tokenPart || 'PENDING'}`;
 }
 
+function formatTicketEventDate(value) {
+  if (!value) return 'يحدد لاحقًا';
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T12:00:00`) : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleDateString('ar-SY', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+function TicketBarcode({ value }) {
+  const barcodeRef = useRef(null);
+  useEffect(() => {
+    if (!barcodeRef.current || !value) return;
+    try {
+      JsBarcode(barcodeRef.current, value, {
+        format: 'CODE128',
+        lineColor: '#4b101d',
+        background: '#fff7e9',
+        width: 2,
+        height: 120,
+        margin: 5,
+        displayValue: false,
+      });
+    } catch (error) {
+      console.error('Barcode generation failed', error);
+    }
+  }, [value]);
+  return <svg ref={barcodeRef} className="ticket-barcode-svg" role="img" aria-label="باركود دخول خاص بفريق التنظيم" />;
+}
+
+function TicketLogo({ compact = false }) {
+  return <div className={`ticket-brand-lockup ${compact ? 'is-compact' : ''}`}>
+    <span className="ticket-brand-emblem"><img src="/brand/ssu-emblem.png" alt="" /></span>
+    <span className="ticket-brand-words"><strong>اتحاد طلبة سوريا</strong><small>فرع محافظة اللاذقية</small></span>
+  </div>;
+}
+
+function EntryTicketCard({ ticket, application, batchName, eventLocation, eventDate }) {
+  const isGraduate = ticket.ticket_type === 'graduate' || Number(ticket.ticket_number) === 0;
+  const ticketNumber = makeTicketDisplayNumber(ticket);
+  return <article className="entry-ticket-card official-event-ticket">
+    <section className="ticket-main-panel" dir="rtl">
+      <div className="ticket-main-ornament" aria-hidden="true" />
+      <div className="ticket-main-brand"><TicketLogo /></div>
+      <div className="ticket-main-copy">
+        <h3>تذكرة دخول<br />حفلات التخرج</h3>
+        <p className="ticket-batch-name">{batchName || 'دفعة البناء والتأسيس 2026'}</p>
+        <div className="ticket-grad-details"><small>{isGraduate ? 'الخريج / الخريجة' : `المرافق رقم ${fmt(ticket.ticket_number)}`}</small><strong>{application.full_name || '—'}</strong><span>{application.department || '—'}{application.specialization && application.specialization !== 'لا يوجد اختصاص' ? ` · ${application.specialization}` : ''}</span></div>
+        <span className="ticket-graduation-cap" aria-hidden="true"><i /></span>
+      </div>
+      <div className="ticket-main-slogan">نحو مستقبل يصنعه الشباب</div>
+    </section>
+    <div className="ticket-perforation" aria-hidden="true"><span /><span /></div>
+    <aside className="ticket-stub-panel" dir="rtl">
+      <div className="ticket-stub-brand"><TicketLogo compact /></div>
+      <div className="ticket-stub-content" dir="ltr">
+        <div className="ticket-barcode-column"><div className="ticket-barcode-rotated"><TicketBarcode value={ticket.ticket_token} /></div><small dir="ltr">NO. {ticketNumber}</small></div>
+        <div className="ticket-stub-fields" dir="rtl">
+          <div><span>المكان</span><strong>{eventLocation || 'يحدد لاحقًا'}</strong></div>
+          <div><span>التاريخ</span><strong>{formatTicketEventDate(eventDate)}</strong></div>
+          <div><span>نوع الدخول</span><strong>{isGraduate ? 'خريج' : `مرافق ${fmt(ticket.ticket_number)}`}</strong></div>
+          <div><span>رقم التذكرة</span><strong dir="ltr">{ticketNumber}</strong></div>
+        </div>
+      </div>
+      <div className="ticket-stub-footer">تذكرة شخصية — صالحة بعد الموافقة النهائية فقط</div>
+    </aside>
+  </article>;
+}
 function VerifiedTicket({ verification }) {
   const { ticket, graduate } = verification;
   const isGraduate = ticket.type === 'graduate' || ticket.number === 0;
   return <div className="panel verified-ticket-panel">
-    <div className="verified-ticket-status"><span className="verified-status-icon">✓</span><div><strong>البطاقة صالحة للدخول</strong><small>تم التحقق من رمز QR وموافقة الطلب</small></div><span className="status-badge approved">مقبول</span></div>
+    <div className="verified-ticket-status"><span className="verified-status-icon">✓</span><div><strong>البطاقة صالحة للدخول</strong><small>تم التحقق من رمز البطاقة وموافقة الطلب</small></div><span className="status-badge approved">مقبول</span></div>
     <div className="verified-ticket-kind"><span className="verified-ticket-type-mark">{isGraduate ? 'خريج' : 'مرافق'}</span><div><small>نوع البطاقة</small><h2>{isGraduate ? 'بطاقة الخريج' : `بطاقة المرافق رقم ${ticket.number}`}</h2></div></div>
     <div className="verified-person-name"><span>اسم الخريج</span><strong>{graduate.full_name}</strong></div>
     <div className="verified-data-grid">
@@ -562,7 +613,7 @@ function GateOperationsPanel({ staffUser, staffRole, notify, embedded = false, o
 
   const checkIn = useCallback(async (raw) => {
     const token = extractTicketToken(raw);
-    if (!token) return notify('لم يتم العثور على رمز بطاقة QR صحيح. يمكنك لصق الرابط الكامل أو رمز TKT.', 'error');
+    if (!token) return notify('لم يتم العثور على باركود أو QR صالح. امسح تذكرة أصلية أو أدخل رمز TKT يدويًا.', 'error');
     setBusy(true); setResult(null); setCameraError('');
     try {
       const { data, error } = await supabase.functions.invoke('check-in-ticket', { body: { ticket_token: token } });
@@ -585,7 +636,11 @@ function GateOperationsPanel({ staffUser, staffRole, notify, embedded = false, o
   useEffect(() => {
     if (!cameraActive || !videoRef.current) return undefined;
     let cancelled = false;
-    const reader = new BrowserQRCodeReader();
+    const hints = new Map([
+      [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128, BarcodeFormat.QR_CODE]],
+      [DecodeHintType.TRY_HARDER, true],
+    ]);
+    const reader = new BrowserMultiFormatReader(hints);
     readerRef.current = reader;
     setCameraError('');
     reader.decodeFromVideoDevice(undefined, videoRef.current, (decoded, _err, controls) => {
@@ -618,18 +673,18 @@ function GateOperationsPanel({ staffUser, staffRole, notify, embedded = false, o
   }
 
   return <div className={`panel settings-panel gate-operations-panel ${embedded ? 'embedded-ops-panel' : ''}`}>
-    <div className="settings-header"><div><span className="section-index">مخصص لفريق التنظيم</span><h2>بوابة التحقق وتسجيل الدخول</h2><p>المسح من كاميرا الهاتف هنا فقط هو الذي يسجل دخول البطاقة. فتح QR بكاميرا الهاتف العادية يعرض صفحة معلومات للقراءة فقط ولا يلغي البطاقة.</p></div><span className="status-badge approved">دخول الموظف: {staffUser?.email || 'موظف مخوّل'}</span></div>
+    <div className="settings-header"><div><span className="section-index">مخصص لفريق التنظيم</span><h2>بوابة التحقق وتسجيل الدخول</h2><p>المسح من هذه الصفحة بعد تسجيل دخول موظف مخوّل هو وحده الذي يسجل دخول البطاقة. الباركود الجديد يحتوي رمز البطاقة فقط، ومسح QR القديم بكاميرا عادية لا يسجل الدخول ولا يلغي البطاقة.</p></div><span className="status-badge approved">دخول الموظف: {staffUser?.email || 'موظف مخوّل'}</span></div>
     <div className="gate-scan-layout">
       <div className="gate-camera-box">
         <video ref={videoRef} className={`gate-camera-video ${cameraActive ? 'is-active' : ''}`} muted playsInline />
-        {!cameraActive && <div className="gate-camera-placeholder"><span className="gate-scan-frame" aria-hidden="true" /><strong>وجّه كاميرا الهاتف إلى QR البطاقة</strong><small>تسجيل الدخول يتم مرة واحدة وبصلاحية حساب الموظف فقط.</small></div>}
-        <div className="gate-camera-actions">{cameraActive ? <button type="button" className="reject-button" onClick={() => setCameraActive(false)}>إيقاف الكاميرا</button> : <button type="button" className="primary-button" disabled={busy} onClick={() => { setResult(null); setCameraError(''); setCameraActive(true); }}>تشغيل ماسح QR</button>}</div>
+        {!cameraActive && <div className="gate-camera-placeholder"><span className="gate-scan-frame" aria-hidden="true" /><strong>وجّه كاميرا الهاتف إلى الباركود أو QR القديم</strong><small>تسجيل الدخول يتم مرة واحدة وبصلاحية حساب الموظف فقط.</small></div>}
+        <div className="gate-camera-actions">{cameraActive ? <button type="button" className="reject-button" onClick={() => setCameraActive(false)}>إيقاف الكاميرا</button> : <button type="button" className="primary-button" disabled={busy} onClick={() => { setResult(null); setCameraError(''); setCameraActive(true); }}>تشغيل ماسح التذاكر</button>}</div>
         {cameraError && <div className="notice notice-warning" role="alert">{cameraError}</div>}
         {typeof window !== 'undefined' && !('mediaDevices' in navigator) && <p className="muted-line">لا يدعم هذا المتصفح تشغيل الكاميرا. استخدم خانة إدخال الرمز أدناه.</p>}
       </div>
       <div className="gate-manual-box">
         <h3>إدخال الرمز يدويًا</h3><p>استخدم هذا الخيار إذا لم تعمل الكاميرا أو كانت البطاقة مطبوعة بصورة غير واضحة.</p>
-        <form onSubmit={handleManualSubmit}><label className="field"><span>رمز البطاقة أو رابط QR</span><input value={manualInput} onChange={(e) => setManualInput(e.target.value.toUpperCase())} placeholder="TKT-… أو الصق الرابط الكامل" dir="ltr" required /></label><button className="primary-button" type="submit" disabled={busy || !manualInput.trim()}>{busy ? 'جارٍ التحقق…' : 'التحقق وتسجيل الدخول'}</button></form>
+        <form onSubmit={handleManualSubmit}><label className="field"><span>رمز البطاقة أو نص QR القديم</span><input value={manualInput} onChange={(e) => setManualInput(e.target.value.toUpperCase())} placeholder="TKT-… أو الصق الرابط الكامل" dir="ltr" required /></label><button className="primary-button" type="submit" disabled={busy || !manualInput.trim()}>{busy ? 'جارٍ التحقق…' : 'التحقق وتسجيل الدخول'}</button></form>
         <div className="important-warning"><strong>قاعدة البوابة</strong><p>كل تذكرة تُسجل مرة واحدة فقط. إذا ظهرت «مستخدمة سابقًا» فلا تسمح بالدخول بالبطاقة نفسها، واطلب مراجعة المشرف إذا كان هناك اعتراض.</p></div>
       </div>
     </div>
@@ -642,7 +697,7 @@ function GateOperationsPanel({ staffUser, staffRole, notify, embedded = false, o
 }
 
 function GateDashboard({ staffUser, staffRole, notify, onSignOut }) {
-  return <section className="container inner-page gate-dashboard"><div className="inner-hero"><span className="section-index">صلاحية بوابة الدخول</span><h1>التحقق من بطاقات حفل التخرج</h1><p>لا يُسجّل أي QR دخولًا إلا من هذه الصفحة بعد التحقق من حساب الفريق.</p></div><GateOperationsPanel staffUser={staffUser} staffRole={staffRole} notify={notify} /><button className="secondary-button full-width-button" onClick={onSignOut}>تسجيل الخروج</button></section>;
+  return <section className="container inner-page gate-dashboard"><div className="inner-hero"><span className="section-index">صلاحية بوابة الدخول</span><h1>التحقق من بطاقات حفل التخرج</h1><p>لا يُسجّل دخول البطاقة إلا من ماسح التذاكر بعد التحقق من حساب الفريق.</p></div><GateOperationsPanel staffUser={staffUser} staffRole={staffRole} notify={notify} /><button className="secondary-button full-width-button" onClick={onSignOut}>تسجيل الخروج</button></section>;
 }
 
 function FinancialDashboard({ staffRole, notify, onSignOut, standalone = false, embedded = false }) {
@@ -1216,7 +1271,9 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
     setSavingSettings(true);
     const dataToSave = {
       event_title: localSettings.event_title.trim(),
-      batch_name: String(localSettings.batch_name || '').trim() || 'دفعة 2026',
+      batch_name: String(localSettings.batch_name || '').trim() || 'دفعة البناء والتأسيس 2026',
+      event_location: String(localSettings.event_location || '').trim(),
+      event_date: localSettings.event_date || null,
       university_label: localSettings.university_label.trim(),
       organizer: localSettings.organizer.trim(),
       registration_open: Boolean(localSettings.registration_open),
@@ -1464,7 +1521,7 @@ function AdminDashboard({ staffUser, staffRole, settings, setSettings, refreshSe
 
     {tab === 'team' && isAdmin && <StaffManagementPanel staffUser={staffUser} catalog={catalog} notify={notify} />}
 
-    {tab === 'settings' && isAdmin && <div className="panel settings-panel"><div className="settings-header"><div><span className="section-index">تخصيص المنصة</span><h2>الرسوم والدفع</h2><p>تطبق الإعدادات على الطلبات الجديدة. تبقى مبالغ الطلبات المنشأة سابقاً محفوظة كما هي.</p></div><span className={`open-indicator ${localSettings.registration_open ? 'is-open' : ''}`}>{localSettings.registration_open ? 'التسجيل العام مفتوح' : 'التسجيل العام مغلق'}</span></div><form onSubmit={saveSettings}><div className="settings-grid"><label className="field"><span>عنوان الصفحة</span><input value={localSettings.event_title || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, event_title: e.target.value }))} required /></label><label className="field"><span>اسم الدفعة</span><input value={localSettings.batch_name || 'دفعة 2026'} onChange={(e) => setLocalSettings((s) => ({ ...s, batch_name: e.target.value }))} placeholder="مثال: دفعة الأمل 2026" required /></label><label className="field"><span>اسم الجامعة</span><input value={localSettings.university_label || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, university_label: e.target.value }))} required /></label><label className="field field-full"><span>الجهة المنظمة</span><input value={localSettings.organizer || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, organizer: e.target.value }))} required /></label><label className="field"><span>رسوم الطالب (ل.س)</span><input type="number" min="0" step="1" value={localSettings.student_fee ?? 0} onChange={(e) => setLocalSettings((s) => ({ ...s, student_fee: e.target.value }))} required /></label><label className="field"><span>رسوم المرافق الواحد (ل.س)</span><input type="number" min="0" step="1" value={localSettings.companion_fee ?? 0} onChange={(e) => setLocalSettings((s) => ({ ...s, companion_fee: e.target.value }))} required /></label><label className="field"><span>الحد الأقصى للمرافقين</span><input type="number" min="0" max="20" step="1" value={localSettings.max_companions ?? 4} onChange={(e) => setLocalSettings((s) => ({ ...s, max_companions: e.target.value }))} required /></label><label className="field"><span>الحد الأقصى للمواد المحمولة</span><input type="number" min="0" max="30" step="1" value={localSettings.max_carried_subjects ?? 5} onChange={(e) => setLocalSettings((s) => ({ ...s, max_carried_subjects: e.target.value }))} required /><small className="field-help">يُرفض التسجيل تلقائياً إذا تجاوز الطالب الحد المحدد.</small></label><label className="field field-full"><span>رقم حساب شام كاش</span><input value={localSettings.shamcash_account || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, shamcash_account: e.target.value }))} placeholder="أدخل رقم الحساب أو معرّف الدفع" /></label><label className="field field-full"><span>ملاحظات إضافية تظهر للطلاب في صفحة الدفع</span><textarea rows="3" value={localSettings.payment_instructions || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, payment_instructions: e.target.value }))} /></label><div className="field field-full"><span>رمز QR للدفع</span><div className="qr-admin-upload">{localSettings.qr_image_url && <img src={localSettings.qr_image_url} alt="رمز الدفع الحالي" />}<label className="secondary-button upload-qr-button">رفع صورة QR<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => uploadQr(e.target.files?.[0])} /></label><small>صورة PNG أو JPG أو WebP، حتى 3 ميغابايت.</small></div></div><div className="field field-full"><span>صور توضيحية لخطوات الدفع (حتى 8 صور)</span><div className="payment-images-admin"><label className="secondary-button upload-qr-button">إضافة صور توضيحية<input type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={(e) => { uploadPaymentImages(Array.from(e.target.files || [])); e.target.value = ''; }} /></label><div className="payment-images-admin-grid">{(Array.isArray(localSettings.payment_images) ? localSettings.payment_images : []).map((url, index) => <figure key={url}><img src={url} alt={`صورة الدفع ${index + 1}`} /><button type="button" className="reject-button" onClick={() => setLocalSettings((old) => ({ ...old, payment_images: old.payment_images.filter((item) => item !== url) }))}>إزالة الصورة</button></figure>)}</div><small>بعد الإضافة أو الإزالة اضغط «حفظ الإعدادات» حتى تظهر التغييرات للطلاب.</small></div></div><label className="toggle-row field-full"><input type="checkbox" checked={Boolean(localSettings.registration_open)} onChange={(e) => setLocalSettings((s) => ({ ...s, registration_open: e.target.checked }))} /><span className="toggle-look" /><span><strong>فتح التسجيل العام</strong><small>يجب فتح التسجيل العام والجهة الدراسية والاختصاص حتى يستطيع الطالب التسجيل.</small></span></label></div><div className="settings-save-row"><button className="primary-button" disabled={savingSettings}><span>{savingSettings ? 'جارٍ الحفظ…' : 'حفظ الإعدادات'}</span><span className="button-arrow">←</span></button><button type="button" className="secondary-button" onClick={() => setLocalSettings({ ...DEFAULT_SETTINGS, ...settings, payment_images: Array.isArray(settings.payment_images) ? settings.payment_images : [] })}>إلغاء التعديلات</button></div></form></div>}
+    {tab === 'settings' && isAdmin && <div className="panel settings-panel"><div className="settings-header"><div><span className="section-index">تخصيص المنصة</span><h2>الرسوم والدفع</h2><p>تطبق الإعدادات على الطلبات الجديدة. تبقى مبالغ الطلبات المنشأة سابقاً محفوظة كما هي.</p></div><span className={`open-indicator ${localSettings.registration_open ? 'is-open' : ''}`}>{localSettings.registration_open ? 'التسجيل العام مفتوح' : 'التسجيل العام مغلق'}</span></div><form onSubmit={saveSettings}><div className="settings-grid"><label className="field"><span>عنوان الصفحة</span><input value={localSettings.event_title || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, event_title: e.target.value }))} required /></label><label className="field"><span>اسم الدفعة</span><input value={localSettings.batch_name || 'دفعة 2026'} onChange={(e) => setLocalSettings((s) => ({ ...s, batch_name: e.target.value }))} placeholder="مثال: دفعة الأمل 2026" required /></label><label className="field"><span>اسم الجامعة</span><input value={localSettings.university_label || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, university_label: e.target.value }))} required /></label><label className="field"><span>مكان الحفل (يظهر على التذكرة)</span><input value={localSettings.event_location || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, event_location: e.target.value }))} placeholder="مثال: الصالة الرياضية في الجامعة" /></label><label className="field"><span>تاريخ الحفل (يظهر على التذكرة)</span><input type="date" value={localSettings.event_date || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, event_date: e.target.value }))} /></label><label className="field field-full"><span>الجهة المنظمة</span><input value={localSettings.organizer || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, organizer: e.target.value }))} required /></label><label className="field"><span>رسوم الطالب (ل.س)</span><input type="number" min="0" step="1" value={localSettings.student_fee ?? 0} onChange={(e) => setLocalSettings((s) => ({ ...s, student_fee: e.target.value }))} required /></label><label className="field"><span>رسوم المرافق الواحد (ل.س)</span><input type="number" min="0" step="1" value={localSettings.companion_fee ?? 0} onChange={(e) => setLocalSettings((s) => ({ ...s, companion_fee: e.target.value }))} required /></label><label className="field"><span>الحد الأقصى للمرافقين</span><input type="number" min="0" max="20" step="1" value={localSettings.max_companions ?? 4} onChange={(e) => setLocalSettings((s) => ({ ...s, max_companions: e.target.value }))} required /></label><label className="field"><span>الحد الأقصى للمواد المحمولة</span><input type="number" min="0" max="30" step="1" value={localSettings.max_carried_subjects ?? 5} onChange={(e) => setLocalSettings((s) => ({ ...s, max_carried_subjects: e.target.value }))} required /><small className="field-help">يُرفض التسجيل تلقائياً إذا تجاوز الطالب الحد المحدد.</small></label><label className="field field-full"><span>رقم حساب شام كاش</span><input value={localSettings.shamcash_account || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, shamcash_account: e.target.value }))} placeholder="أدخل رقم الحساب أو معرّف الدفع" /></label><label className="field field-full"><span>ملاحظات إضافية تظهر للطلاب في صفحة الدفع</span><textarea rows="3" value={localSettings.payment_instructions || ''} onChange={(e) => setLocalSettings((s) => ({ ...s, payment_instructions: e.target.value }))} /></label><div className="field field-full"><span>رمز QR للدفع</span><div className="qr-admin-upload">{localSettings.qr_image_url && <img src={localSettings.qr_image_url} alt="رمز الدفع الحالي" />}<label className="secondary-button upload-qr-button">رفع صورة QR<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => uploadQr(e.target.files?.[0])} /></label><small>صورة PNG أو JPG أو WebP، حتى 3 ميغابايت.</small></div></div><div className="field field-full"><span>صور توضيحية لخطوات الدفع (حتى 8 صور)</span><div className="payment-images-admin"><label className="secondary-button upload-qr-button">إضافة صور توضيحية<input type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={(e) => { uploadPaymentImages(Array.from(e.target.files || [])); e.target.value = ''; }} /></label><div className="payment-images-admin-grid">{(Array.isArray(localSettings.payment_images) ? localSettings.payment_images : []).map((url, index) => <figure key={url}><img src={url} alt={`صورة الدفع ${index + 1}`} /><button type="button" className="reject-button" onClick={() => setLocalSettings((old) => ({ ...old, payment_images: old.payment_images.filter((item) => item !== url) }))}>إزالة الصورة</button></figure>)}</div><small>بعد الإضافة أو الإزالة اضغط «حفظ الإعدادات» حتى تظهر التغييرات للطلاب.</small></div></div><label className="toggle-row field-full"><input type="checkbox" checked={Boolean(localSettings.registration_open)} onChange={(e) => setLocalSettings((s) => ({ ...s, registration_open: e.target.checked }))} /><span className="toggle-look" /><span><strong>فتح التسجيل العام</strong><small>يجب فتح التسجيل العام والجهة الدراسية والاختصاص حتى يستطيع الطالب التسجيل.</small></span></label></div><div className="settings-save-row"><button className="primary-button" disabled={savingSettings}><span>{savingSettings ? 'جارٍ الحفظ…' : 'حفظ الإعدادات'}</span><span className="button-arrow">←</span></button><button type="button" className="secondary-button" onClick={() => setLocalSettings({ ...DEFAULT_SETTINGS, ...settings, payment_images: Array.isArray(settings.payment_images) ? settings.payment_images : [] })}>إلغاء التعديلات</button></div></form></div>}
 
     {tab === 'academic' && isAdmin && <div className="panel settings-panel catalog-admin-panel"><div className="settings-header"><div><span className="section-index">قوائم التسجيل</span><h2>إدارة الكليات والمعاهد والاختصاصات</h2><p>يمكنك فتح التسجيل أو إيقافه لكل كلية أو معهد ولكل اختصاص بشكل مستقل. التغييرات تنعكس على القوائم التي يراها الطلاب.</p></div><button className="secondary-button" type="button" onClick={refreshCatalog}>تحديث القوائم ↻</button></div>
       {catalogError && <div className="notice notice-warning"><strong>قاعدة البيانات تحتاج إلى الترقية</strong><p>شغّل ملف supabase/migrations/002_staged_registration_and_academic_catalog.sql في SQL Editor أولاً. التفاصيل: {catalogError}</p></div>}

@@ -18,7 +18,9 @@
     "qrcode": "^1.5.4",
     "pdf-lib": "^1.17.1",
     "jszip": "^3.10.1",
-    "@zxing/browser": "^0.1.5"
+    "@zxing/browser": "^0.1.5",
+    "jsbarcode": "^3.12.3",
+    "@zxing/library": "^0.21.3"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^5.0.2",

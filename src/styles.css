@@ -638,3 +638,53 @@ body{background:#fbf5e9;color:#41423b}
   .financial-ledger-panel .table-scroll table{min-width:700px}
   .audit-detail-json{max-width:74vw}
 }
+
+
+/* المرحلة العاشرة: تذكرة أفقية مستوحاة من النموذج المرفق مع باركود CODE128 فعلي. */
+.ticket-preview-scroll{width:100%;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;padding:4px 2px 14px;border-radius:14px;scrollbar-width:thin;}
+.ticket-cards-grid{display:grid;grid-template-columns:minmax(860px,1fr);gap:18px;align-items:start;}
+.entry-ticket-card.official-event-ticket{direction:ltr;display:grid;grid-template-columns:minmax(0,1fr) 1px 330px;min-width:860px;width:100%;min-height:310px;padding:0;overflow:hidden;border:1px solid #5f2934;border-radius:3px;background:#4b101d;color:#fff5e5;box-shadow:0 10px 30px rgba(38,8,17,.17);position:relative;}
+.ticket-main-panel{position:relative;min-width:0;min-height:310px;overflow:hidden;background:linear-gradient(120deg,#41101c 0%,#501322 58%,#5b1726 100%);color:#fff5e5;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:26px 26px 20px;text-align:center;}
+.ticket-main-ornament{position:absolute;inset:0 auto 0 0;width:31%;background-image:url('/brand/ticket-ornament.svg');background-size:cover;background-position:left center;opacity:.55;pointer-events:none;mask-image:linear-gradient(to right,#000 0%,#000 55%,transparent 100%);}
+.ticket-main-brand{position:absolute;top:16px;right:20px;z-index:1;max-width:290px;}
+.ticket-brand-lockup{display:flex;align-items:center;gap:9px;direction:rtl;min-width:0;color:#fff6e8;text-align:right;}
+.ticket-brand-emblem{display:grid;place-items:center;flex:none;width:44px;height:44px;border-radius:50%;background:#fff3df;padding:4px;}
+.ticket-brand-emblem img{display:block;width:100%;height:100%;object-fit:contain;}
+.ticket-brand-words{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.ticket-brand-words strong{font-size:13px;line-height:1.5;font-weight:800;white-space:nowrap;}
+.ticket-brand-words small{font-size:10px;line-height:1.4;color:#eadaca;white-space:nowrap;}
+.ticket-brand-lockup.is-compact{justify-content:center;}
+.ticket-brand-lockup.is-compact .ticket-brand-emblem{width:37px;height:37px;}
+.ticket-brand-lockup.is-compact .ticket-brand-words strong{font-size:12px;}
+.ticket-brand-lockup.is-compact .ticket-brand-words small{font-size:9px;}
+.ticket-main-copy{position:relative;z-index:1;width:min(100%,650px);padding-top:44px;margin-left:18%;}
+.ticket-main-copy h3{margin:0;color:#fff9f0;font-weight:900;font-size:clamp(24px,3vw,36px);line-height:1.45;letter-spacing:.1px;}
+.ticket-batch-name{margin:7px 0 8px;color:#f2ddc6;font-size:15px;font-weight:500;line-height:1.7;}
+.ticket-grad-details{display:flex;flex-direction:column;gap:2px;align-items:center;max-width:100%;}
+.ticket-grad-details small{color:#e7cdb7;font-size:10px;line-height:1.5;}
+.ticket-grad-details strong{max-width:100%;color:#fff9f0;font-size:17px;line-height:1.55;overflow-wrap:anywhere;}
+.ticket-grad-details span{max-width:100%;color:#e7d3c3;font-size:11px;line-height:1.5;overflow-wrap:anywhere;}
+.ticket-graduation-cap{position:relative;display:block;width:47px;height:25px;margin:9px auto 0;}
+.ticket-graduation-cap:before{content:"";position:absolute;inset:0;background:#08070a;clip-path:polygon(50% 0,100% 38%,50% 76%,0 38%);}
+.ticket-graduation-cap:after{content:"";position:absolute;left:12px;right:12px;top:12px;height:12px;background:#08070a;clip-path:polygon(0 0,100% 0,92% 60%,50% 100%,8% 60%);}
+.ticket-graduation-cap i{position:absolute;z-index:1;width:2px;height:19px;right:4px;top:7px;background:#08070a;transform:rotate(-7deg);}
+.ticket-graduation-cap i:after{content:"";position:absolute;bottom:-3px;left:-3px;width:8px;height:8px;border-radius:50%;background:#08070a;}
+.ticket-main-slogan{position:absolute;z-index:1;bottom:12px;left:0;right:0;color:#e8d3c0;font-size:11px;line-height:1.5;text-align:center;}
+.ticket-perforation{position:relative;width:1px;background:repeating-linear-gradient(to bottom,#f3e1d2 0 9px,transparent 9px 17px);z-index:2;}
+.ticket-perforation:before,.ticket-perforation:after{content:"";position:absolute;left:50%;width:22px;height:22px;background:#fffaf2;border-radius:50%;transform:translateX(-50%);}
+.ticket-perforation:before{top:-12px}.ticket-perforation:after{bottom:-12px}
+.ticket-stub-panel{min-width:0;position:relative;display:flex;flex-direction:column;padding:14px 13px 10px;background:#3d0c18;color:#fff5e5;text-align:center;}
+.ticket-stub-brand{display:flex;align-items:center;justify-content:center;min-height:43px;margin-bottom:10px;}
+.ticket-stub-content{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px;align-items:stretch;flex:1;min-height:0;}
+.ticket-barcode-column{display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:0;background:#fff5e5;border-radius:2px;padding:5px 2px;overflow:hidden;}
+.ticket-barcode-rotated{display:flex;align-items:center;justify-content:center;width:64px;height:210px;overflow:hidden;}
+.ticket-barcode-svg{display:block;width:202px;height:61px;max-width:none;transform:rotate(90deg);transform-origin:center;}
+.ticket-barcode-column small{display:block;max-width:100%;margin-top:3px;color:#4b101d;font-size:7px;line-height:1.3;overflow-wrap:anywhere;text-align:center;}
+.ticket-stub-fields{display:flex;flex-direction:column;gap:7px;justify-content:center;min-width:0;}
+.ticket-stub-fields>div{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;min-width:0;min-height:43px;padding:5px 10px;border-radius:24px;background:#f7f0e6;color:#46323a;text-align:right;}
+.ticket-stub-fields span{font-size:9px;line-height:1.4;color:#81716d;}
+.ticket-stub-fields strong{display:block;width:100%;font-size:11px;line-height:1.45;font-weight:700;color:#45323a;overflow-wrap:anywhere;word-break:break-word;}
+.ticket-stub-footer{margin-top:8px;color:#dbc7bb;font-size:8px;line-height:1.5;}
+.ticket-card-footer{display:none;}
+@media(max-width:600px){.ticket-gallery-heading p{font-size:12px}.ticket-preview-scroll{margin-inline:-3px;width:calc(100% + 6px)}.entry-ticket-card.official-event-ticket{min-width:860px;min-height:310px}.ticket-main-panel{min-height:310px}.ticket-main-copy{margin-left:20%;padding-top:42px}.ticket-main-copy h3{font-size:31px}.ticket-brand-emblem{width:40px;height:40px}.ticket-main-brand{right:14px;top:13px}.ticket-stub-panel{padding-inline:10px}.ticket-stub-fields strong{font-size:10px}}
+@media print{.ticket-preview-scroll{overflow:visible;padding:0}.ticket-cards-grid{display:grid;grid-template-columns:1fr;min-width:0}.entry-ticket-card.official-event-ticket{min-width:0;width:100%;break-inside:avoid;box-shadow:none;-webkit-print-color-adjust:exact;print-color-adjust:exact}.ticket-main-panel{min-height:280px}.ticket-gallery-heading{display:none!important}.ticket-download-actions,.ticket-privacy-note{display:none!important}}
