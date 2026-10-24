@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { anonKeyValue, configurationProblem, functionUrl, isConfigured, supabase } from './lib/supabase';
 
 const DEFAULT_SETTINGS = {
